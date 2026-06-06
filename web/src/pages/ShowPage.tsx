@@ -99,7 +99,13 @@ export function ShowPage() {
         ))}
       </div>
 
-      <div className="mt-4">
+      <div className="mt-5 flex items-center gap-4 text-xs text-zinc-500">
+        <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-rose-500" />Filler</span>
+        <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-sky-500" />Worth it</span>
+        <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-emerald-500" />Canon</span>
+      </div>
+
+      <div className="mt-2">
         {loadingEps && <p className="text-zinc-400">Loading episodes…</p>}
         {episodes?.map((ep) => (
           <EpisodeRow key={ep.id} episode={ep} signedIn={!!user} />

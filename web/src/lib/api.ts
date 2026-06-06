@@ -2,9 +2,10 @@
 // in prod Caddy serves the SPA and API together; in dev the Vite proxy forwards
 // `/api` + `/health` to the backend. See internal docs
 
-export type VoteValue = "FILLER" | "CANON";
+export type VoteValue = "FILLER" | "WORTH_WATCHING" | "CANON";
 export type EpisodeStatus =
   | "CANON"
+  | "WORTH_WATCHING"
   | "FILLER"
   | "CONTESTED"
   | "NOT_ENOUGH_VOTES";
@@ -36,6 +37,7 @@ export interface ShowDetail {
 
 export interface EpisodeScore {
   fillerVotes: number;
+  worthWatchingVotes: number;
   canonVotes: number;
   fillerScore: number | null;
   status: EpisodeStatus;
