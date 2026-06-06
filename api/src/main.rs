@@ -257,14 +257,15 @@ async fn vote_response(
     episode_id: Uuid,
     my_vote: Option<VoteValue>,
 ) -> Result<VoteResponse, AppError> {
-    let (filler, canon) = db::episode_aggregate(&state.pool, episode_id).await?;
+    let (f, w, c) = db::episode_aggregate(&state.pool, episode_id).await?;
     Ok(VoteResponse {
         my_vote,
         score: AggregateView {
-            filler_votes: filler,
-            canon_votes: canon,
-            filler_score: scoring::filler_score(filler, canon),
-            status: scoring::status(filler, canon),
+            filler_votes: f,
+            worth_watching_votes: w,
+            canon_votes: c,
+            filler_score: scoring::filler_score(f, w, c),
+            status: scoring::status(f, w, c),
         },
     })
 }

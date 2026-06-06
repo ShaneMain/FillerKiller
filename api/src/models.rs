@@ -50,6 +50,7 @@ pub struct ShowDetail {
 #[serde(rename_all = "camelCase")]
 pub struct EpisodeScoreView {
     pub filler_votes: i64,
+    pub worth_watching_votes: i64,
     pub canon_votes: i64,
     pub filler_score: Option<f64>,
     pub status: EpisodeStatus,
@@ -80,6 +81,7 @@ pub struct EpisodesResponse {
 #[serde(rename_all = "camelCase")]
 pub struct AggregateView {
     pub filler_votes: i64,
+    pub worth_watching_votes: i64,
     pub canon_votes: i64,
     pub filler_score: Option<f64>,
     pub status: EpisodeStatus,

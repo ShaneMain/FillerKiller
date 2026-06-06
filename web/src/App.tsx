@@ -1,41 +1,21 @@
-import { useEffect, useState } from "react";
-import { getHealth, API_BASE_URL } from "./lib/api";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { AuthProvider } from "./lib/auth";
+import { Header } from "./components/Header";
+import { SearchPage } from "./pages/SearchPage";
+import { ShowPage } from "./pages/ShowPage";
 
-type ApiState =
-  | { kind: "loading" }
-  | { kind: "ok"; status: string }
-  | { kind: "error"; message: string };
-
-function App() {
-  const [api, setApi] = useState<ApiState>({ kind: "loading" });
-
-  useEffect(() => {
-    let cancelled = false;
-    getHealth()
-      .then((h) => !cancelled && setApi({ kind: "ok", status: h.status }))
-      .catch(
-        (e) => !cancelled && setApi({ kind: "error", message: String(e) }),
-      );
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return;
-}
-
-function ApiBadge({ api }: { api: ApiState }) {
-  if (api.kind === "loading") {
-    return <span className="text-amber-400">checking…</span>;
-  }
-  if (api.kind === "ok") {
-    return <span className="text-emerald-400">● connected ({api.status})</span>;
-  }
+export default function App() {
   return (
-    <span className="text-rose-400" title={api.message}>
-      ● unreachable (start the API)
-    </span>
+    <BrowserRouter>
+      <AuthProvider>
+        <div className="min-h-screen bg-zinc-950 text-zinc-100">
+          <Header />
+          <Routes>
+            <Route path="/" element={<SearchPage />} />
+            <Route path="/shows/:id" element={<ShowPage />} />
+          </Routes>
+        </div>
+      </AuthProvider>
+    </BrowserRouter>
   );
 }
-
-export default App;

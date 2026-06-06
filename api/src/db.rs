@@ -221,8 +221,9 @@ pub async fn episodes_with_scores(
             e.name,
             e.air_date,
             e.still_path,
-            COUNT(v.id) FILTER (WHERE v.value = 'FILLER') AS "filler_votes!",
-            COUNT(v.id) FILTER (WHERE v.value = 'CANON')  AS "canon_votes!",
+            COUNT(v.id) FILTER (WHERE v.value = 'FILLER')         AS "filler_votes!",
+            COUNT(v.id) FILTER (WHERE v.value = 'WORTH_WATCHING') AS "worth_watching_votes!",
+            COUNT(v.id) FILTER (WHERE v.value = 'CANON')          AS "canon_votes!",
             (SELECT mv.value::text FROM vote mv
              WHERE mv.episode_id = e.id AND mv.user_id = $3) AS "my_vote?"
         FROM episode e
@@ -241,8 +242,7 @@ pub async fn episodes_with_scores(
     Ok(rows
         .into_iter()
         .map(|r| {
-            let filler = r.filler_votes;
-            let canon = r.canon_votes;
+            let (f, w, c) = (r.filler_votes, r.worth_watching_votes, r.canon_votes);
             EpisodeItem {
                 id: r.id,
                 season_number: r.season_number,
@@ -251,10 +251,11 @@ pub async fn episodes_with_scores(
                 air_date: r.air_date,
                 still_path: r.still_path,
                 score: EpisodeScoreView {
-                    filler_votes: filler,
-                    canon_votes: canon,
-                    filler_score: scoring::filler_score(filler, canon),
-                    status: scoring::status(filler, canon),
+                    filler_votes: f,
+                    worth_watching_votes: w,
+                    canon_votes: c,
+                    filler_score: scoring::filler_score(f, w, c),
+                    status: scoring::status(f, w, c),
                     my_vote: r.my_vote.as_deref().and_then(scoring::VoteValue::from_db),
                 },
             }
@@ -312,21 +313,22 @@ pub async fn delete_vote(
     Ok(res.rows_affected())
 }
 
-/// Aggregate filler/canon counts for one episode.
+/// Aggregate (filler, worth_watching, canon) vote counts for one episode.
 pub async fn episode_aggregate(
     pool: &PgPool,
     episode_id: Uuid,
-) -> Result<(i64, i64), sqlx::Error> {
+) -> Result<(i64, i64, i64), sqlx::Error> {
     let row = sqlx::query!(
         r#"
         SELECT
-            COUNT(*) FILTER (WHERE value = 'FILLER') AS "filler!",
-            COUNT(*) FILTER (WHERE value = 'CANON')  AS "canon!"
+            COUNT(*) FILTER (WHERE value = 'FILLER')         AS "filler!",
+            COUNT(*) FILTER (WHERE value = 'WORTH_WATCHING') AS "worth_watching!",
+            COUNT(*) FILTER (WHERE value = 'CANON')          AS "canon!"
         FROM vote WHERE episode_id = $1
         "#,
         episode_id,
     )
     .fetch_one(pool)
     .await?;
-    Ok((row.filler, row.canon))
+    Ok((row.filler, row.worth_watching, row.canon))
 }

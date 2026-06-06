@@ -1,0 +1,47 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - link "FillerKiller" [ref=e6] [cursor=pointer]:
+        - /url: /
+      - generic [ref=e14]:
+        - link "Sign in with GitHub" [ref=e15] [cursor=pointer]:
+          - /url: /api/auth/github/login
+        - link "Google" [ref=e16] [cursor=pointer]:
+          - /url: /api/auth/google/login
+  - generic [ref=e8]:
+    - heading "Find a show" [level=1] [ref=e9]
+    - paragraph [ref=e10]: Search a TV series, then vote on which episodes are filler.
+    - generic [ref=e11]:
+      - textbox "e.g. Breaking Bad" [active] [ref=e12]: breaking bad
+      - button "Search" [ref=e13]
+    - list [ref=e17]:
+      - listitem [ref=e18]:
+        - link "Breaking Bad 2008" [ref=e19] [cursor=pointer]:
+          - /url: /shows/071eaeb4-d9d7-49b5-9798-36b8a619c979
+          - generic [ref=e20]:
+            - generic [ref=e21]: Breaking Bad
+            - generic [ref=e22]: "2008"
+      - listitem [ref=e23]:
+        - 'link "Breaking Bad: Original Minisodes 2009" [ref=e24] [cursor=pointer]':
+          - /url: /shows/tmdb%3A297997
+          - generic [ref=e25]:
+            - generic [ref=e26]: "Breaking Bad: Original Minisodes"
+            - generic [ref=e27]: "2009"
+      - listitem [ref=e28]:
+        - link "Breaking Bad Fortune Teller 2016" [ref=e29] [cursor=pointer]:
+          - /url: /shows/tmdb%3A232533
+          - generic [ref=e30]:
+            - generic [ref=e31]: Breaking Bad Fortune Teller
+            - generic [ref=e32]: "2016"
+      - listitem [ref=e33]:
+        - link "Breaking Bad - E01-dj smith —" [ref=e34] [cursor=pointer]:
+          - /url: /shows/tmdb%3A308197
+          - generic [ref=e36]:
+            - generic [ref=e37]: Breaking Bad - E01-dj smith
+            - generic [ref=e38]: —
+      - listitem [ref=e39]:
+        - 'link "The Bad Guys: The Series 2025" [ref=e40] [cursor=pointer]':
+          - /url: /shows/tmdb%3A302540
+          - generic [ref=e41]:
+            - generic [ref=e42]: "The Bad Guys: The Series"
+            - generic [ref=e43]: "2025"

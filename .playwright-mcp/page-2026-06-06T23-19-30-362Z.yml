@@ -1,0 +1,12 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - link "FillerKiller" [ref=e6] [cursor=pointer]:
+        - /url: /
+      - generic [ref=e7]: …
+  - generic [ref=e8]:
+    - heading "Find a show" [level=1] [ref=e9]
+    - paragraph [ref=e10]: Search a TV series, then vote on which episodes are filler.
+    - generic [ref=e11]:
+      - textbox "e.g. Breaking Bad" [active] [ref=e12]
+      - button "Search" [ref=e13]
