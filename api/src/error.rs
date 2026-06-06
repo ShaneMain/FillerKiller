@@ -12,6 +12,8 @@ use crate::tmdb::TmdbError;
 pub enum AppError {
     NotFound(String),
     BadRequest(String),
+    /// Missing or invalid session.
+    Unauthorized,
     /// Upstream (TMDB) failure.
     Upstream(String),
     /// Upstream asked us to back off.
@@ -25,6 +27,11 @@ impl AppError {
         match self {
             AppError::NotFound(m) => (StatusCode::NOT_FOUND, "not_found", m.clone()),
             AppError::BadRequest(m) => (StatusCode::BAD_REQUEST, "bad_request", m.clone()),
+            AppError::Unauthorized => (
+                StatusCode::UNAUTHORIZED,
+                "unauthorized",
+                "authentication required".to_string(),
+            ),
             AppError::Upstream(m) => (StatusCode::BAD_GATEWAY, "upstream_error", m.clone()),
             AppError::UpstreamRateLimited => (
                 StatusCode::SERVICE_UNAVAILABLE,

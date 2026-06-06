@@ -151,6 +151,28 @@ pub async fn upsert_episode(
     Ok(())
 }
 
+/// Find or create a user by email. Updates
+/// the display name on subsequent logins. Returns our user id.
+pub async fn upsert_user_by_email(
+    pool: &PgPool,
+    email: &str,
+    display_name: Option<&str>,
+) -> Result<Uuid, sqlx::Error> {
+    let id = sqlx::query_scalar!(
+        r#"
+        INSERT INTO app_user (email, display_name)
+        VALUES ($1, $2)
+        ON CONFLICT (email) DO UPDATE SET display_name = EXCLUDED.display_name
+        RETURNING id
+        "#,
+        email,
+        display_name,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(id)
+}
+
 /// Seasons for a show with their imported-episode counts, ordered by number.
 pub async fn seasons_with_counts(
     pool: &PgPool,

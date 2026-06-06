@@ -71,7 +71,17 @@ a live dev DB: `cargo sqlx prepare`, and commit the updated `.sqlx/`.
 | `GET` | `/api/search?q=` | Proxy TMDB search; annotates imported shows. |
 | `GET` | `/api/shows/{id}` | Show + seasons. `{id}` is our uuid or `tmdb:<n>` (imports on demand). |
 | `GET` | `/api/shows/{id}/episodes?season=` | Episodes with aggregate filler scores. |
+| `GET` | `/api/auth/{provider}/login` | OAuth sign-in (`google`/`github`). |
+| `GET` | `/api/auth/{provider}/callback` | OAuth callback → sets session cookie. |
+| `POST` | `/api/auth/logout` | Clear the session. |
+| `GET` | `/api/me` | Current user (from JWT cookie) or `null`. |
 | `GET` | `/health`, `/health/db` | Liveness / DB readiness. |
+
+**Auth** is OAuth → stateless JWT in an httpOnly cookie. To test sign-in
+locally, register an OAuth app and set its redirect URI to
+`http://localhost:8080/api/auth/{provider}/callback`, then set the provider's
+`*_CLIENT_ID`/`*_CLIENT_SECRET` and `AUTH_JWT_SECRET` in `api/.env`. A provider with no
+credentials is simply disabled.
 
 Catalog responses set `Cache-Control` (longer for static catalog, short for vote-derived
 scores) per the design notes.

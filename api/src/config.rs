@@ -1,6 +1,8 @@
 //! Runtime configuration, loaded from the environment. See api/.env.example
 //! and the design notes.
 
+use crate::oauth::{ProviderConfig, ProviderKind};
+
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Postgres connection string. Use the POOLED string for serverless
@@ -14,10 +16,40 @@ pub struct Config {
     pub cors_allowed_origin: String,
     /// Address to bind, e.g. "0.0.0.0:8080".
     pub bind_addr: String,
+    /// Auth settings (OAuth + JWT). See the design notes.
+    pub auth: AuthConfig,
+}
+
+/// Auth configuration: JWT signing, OAuth redirect/return URLs, and the set of
+/// enabled providers. A provider is enabled only if both its id and secret are
+/// present in the environment.
+#[derive(Debug, Clone)]
+pub struct AuthConfig {
+    pub jwt_secret: String,
+    /// Public base URL of this API, used to build OAuth redirect URIs.
+    pub base_url: String,
+    /// Where to send the browser after a successful login.
+    pub web_post_login_url: String,
+    /// Whether to mark cookies `Secure` (true in prod/HTTPS).
+    pub cookie_secure: bool,
+    pub providers: Vec<ProviderConfig>,
+}
+
+impl AuthConfig {
+    pub fn provider(&self, name: &str) -> Option<&ProviderConfig> {
+        self.providers.iter().find(|p| p.kind.as_str() == name)
+    }
 }
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
+        let jwt_secret = required("AUTH_JWT_SECRET")?;
+        if jwt_secret.trim().len() < 32 {
+            anyhow::bail!(
+                "AUTH_JWT_SECRET must be at least 32 bytes; generate with: openssl rand -base64 32"
+            );
+        }
+
         Ok(Self {
             database_url: required("DATABASE_URL")?,
             tmdb_token: required("TMDB_API_READ_TOKEN")?,
@@ -27,8 +59,38 @@ impl Config {
             ),
             cors_allowed_origin: optional("CORS_ALLOWED_ORIGIN", "http://localhost:5173"),
             bind_addr: optional("BIND_ADDR", "0.0.0.0:8080"),
+            auth: AuthConfig {
+                jwt_secret,
+                base_url: optional("AUTH_BASE_URL", "http://localhost:8080"),
+                web_post_login_url: optional("WEB_POST_LOGIN_URL", "http://localhost:5173"),
+                cookie_secure: optional("AUTH_COOKIE_SECURE", "false") == "true",
+                providers: load_providers(),
+            },
         })
     }
+}
+
+/// Build the list of enabled OAuth providers from the environment.
+fn load_providers() -> Vec<ProviderConfig> {
+    let mut providers = Vec::new();
+    for kind in [ProviderKind::Google, ProviderKind::Github] {
+        let (id_var, secret_var) = kind.env_vars();
+        if let (Ok(client_id), Ok(client_secret)) =
+            (std::env::var(id_var), std::env::var(secret_var))
+        {
+            if !client_id.is_empty() && !client_secret.is_empty() {
+                providers.push(ProviderConfig {
+                    kind,
+                    client_id,
+                    client_secret,
+                });
+            }
+        }
+    }
+    if providers.is_empty() {
+        tracing::warn!("no OAuth providers configured; sign-in is disabled");
+    }
+    providers
 }
 
 fn required(key: &str) -> anyhow::Result<String> {
