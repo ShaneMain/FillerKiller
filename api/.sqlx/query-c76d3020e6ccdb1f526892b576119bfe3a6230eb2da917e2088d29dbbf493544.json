@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT s.id, s.season_number, s.name, COUNT(e.id) AS \"episode_count!\"\n        FROM season s\n        LEFT JOIN episode e ON e.season_id = s.id\n        WHERE s.show_id = $1\n        GROUP BY s.id\n        ORDER BY s.season_number\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "season_number",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "episode_count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "c76d3020e6ccdb1f526892b576119bfe3a6230eb2da917e2088d29dbbf493544"
+}

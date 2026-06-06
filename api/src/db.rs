@@ -1,0 +1,236 @@
+//! Database access for the catalog. Uses `sqlx` compile-time-checked queries
+//! (`query!`/`query_as!`) — verified against the schema at build time, with the
+//! offline `.sqlx` cache committed so builds don't need a live DB.
+
+use chrono::NaiveDate;
+use sqlx::PgPool;
+use uuid::Uuid;
+
+use crate::models::{EpisodeItem, EpisodeScoreView, SeasonSummary};
+use crate::scoring;
+
+/// Core show fields used to build a detail response.
+pub struct ShowCore {
+    pub id: Uuid,
+    pub tmdb_id: i64,
+    pub name: String,
+    pub overview: Option<String>,
+    pub poster_path: Option<String>,
+}
+
+/// Our internal show id for a TMDB id, if the show has been imported.
+pub async fn find_show_id_by_tmdb(pool: &PgPool, tmdb_id: i64) -> Result<Option<Uuid>, sqlx::Error> {
+    let row = sqlx::query_scalar!("SELECT id FROM show WHERE tmdb_id = $1", tmdb_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row)
+}
+
+/// Map a set of TMDB ids to the ones we already have imported.
+pub async fn imported_show_ids(
+    pool: &PgPool,
+    tmdb_ids: &[i64],
+) -> Result<Vec<(i64, Uuid)>, sqlx::Error> {
+    let rows = sqlx::query!(
+        "SELECT tmdb_id, id FROM show WHERE tmdb_id = ANY($1)",
+        tmdb_ids
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.tmdb_id, r.id)).collect())
+}
+
+pub async fn find_show_core(pool: &PgPool, id: Uuid) -> Result<Option<ShowCore>, sqlx::Error> {
+    let row = sqlx::query_as!(
+        ShowCore,
+        "SELECT id, tmdb_id, name, overview, poster_path FROM show WHERE id = $1",
+        id
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn upsert_show(
+    executor: impl sqlx::PgExecutor<'_>,
+    tmdb_id: i64,
+    name: &str,
+    first_air_year: Option<i32>,
+    poster_path: Option<&str>,
+    overview: Option<&str>,
+) -> Result<Uuid, sqlx::Error> {
+    let id = sqlx::query_scalar!(
+        r#"
+        INSERT INTO show (tmdb_id, name, first_air_year, poster_path, overview, last_synced_at)
+        VALUES ($1, $2, $3, $4, $5, now())
+        ON CONFLICT (tmdb_id) DO UPDATE SET
+            name = EXCLUDED.name,
+            first_air_year = EXCLUDED.first_air_year,
+            poster_path = EXCLUDED.poster_path,
+            overview = EXCLUDED.overview,
+            last_synced_at = now()
+        RETURNING id
+        "#,
+        tmdb_id,
+        name,
+        first_air_year,
+        poster_path,
+        overview,
+    )
+    .fetch_one(executor)
+    .await?;
+    Ok(id)
+}
+
+pub async fn upsert_season(
+    executor: impl sqlx::PgExecutor<'_>,
+    show_id: Uuid,
+    season_number: i32,
+    name: Option<&str>,
+) -> Result<Uuid, sqlx::Error> {
+    let id = sqlx::query_scalar!(
+        r#"
+        INSERT INTO season (show_id, season_number, name)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (show_id, season_number) DO UPDATE SET name = EXCLUDED.name
+        RETURNING id
+        "#,
+        show_id,
+        season_number,
+        name,
+    )
+    .fetch_one(executor)
+    .await?;
+    Ok(id)
+}
+
+// NOTE (known gap): `episode` has two unique constraints — `tmdb_id` and
+// `(show_id, season_number, episode_number)`. This upsert handles conflicts on
+// `tmdb_id` only. On a *re-import* where TMDB has renumbered an episode into a
+// slot already held by a different row, the second constraint can raise a unique
+// violation. First-import of a fresh show cannot hit this. Resolve alongside the
+// TTL-refresh feature — e.g. delete-then-insert within the import tx.
+#[allow(clippy::too_many_arguments)]
+pub async fn upsert_episode(
+    executor: impl sqlx::PgExecutor<'_>,
+    show_id: Uuid,
+    season_id: Uuid,
+    tmdb_id: i64,
+    season_number: i32,
+    episode_number: i32,
+    name: Option<&str>,
+    overview: Option<&str>,
+    air_date: Option<NaiveDate>,
+    still_path: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        r#"
+        INSERT INTO episode (
+            show_id, season_id, tmdb_id, season_number, episode_number,
+            name, overview, air_date, still_path
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (tmdb_id) DO UPDATE SET
+            name = EXCLUDED.name,
+            overview = EXCLUDED.overview,
+            air_date = EXCLUDED.air_date,
+            still_path = EXCLUDED.still_path
+        "#,
+        show_id,
+        season_id,
+        tmdb_id,
+        season_number,
+        episode_number,
+        name,
+        overview,
+        air_date,
+        still_path,
+    )
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
+/// Seasons for a show with their imported-episode counts, ordered by number.
+pub async fn seasons_with_counts(
+    pool: &PgPool,
+    show_id: Uuid,
+) -> Result<Vec<SeasonSummary>, sqlx::Error> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT s.id, s.season_number, s.name, COUNT(e.id) AS "episode_count!"
+        FROM season s
+        LEFT JOIN episode e ON e.season_id = s.id
+        WHERE s.show_id = $1
+        GROUP BY s.id
+        ORDER BY s.season_number
+        "#,
+        show_id
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| SeasonSummary {
+            id: r.id,
+            season_number: r.season_number,
+            name: r.name,
+            episode_count: r.episode_count,
+        })
+        .collect())
+}
+
+/// Episodes for a show (optionally one season) with aggregated vote counts,
+/// turned into the API view (status derived via the scoring module).
+pub async fn episodes_with_scores(
+    pool: &PgPool,
+    show_id: Uuid,
+    season: Option<i32>,
+) -> Result<Vec<EpisodeItem>, sqlx::Error> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT
+            e.id,
+            e.season_number,
+            e.episode_number,
+            e.name,
+            e.air_date,
+            e.still_path,
+            COUNT(v.id) FILTER (WHERE v.value = 'FILLER') AS "filler_votes!",
+            COUNT(v.id) FILTER (WHERE v.value = 'CANON')  AS "canon_votes!"
+        FROM episode e
+        LEFT JOIN vote v ON v.episode_id = e.id
+        WHERE e.show_id = $1 AND ($2::int IS NULL OR e.season_number = $2)
+        GROUP BY e.id
+        ORDER BY e.season_number, e.episode_number
+        "#,
+        show_id,
+        season,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let filler = r.filler_votes;
+            let canon = r.canon_votes;
+            EpisodeItem {
+                id: r.id,
+                season_number: r.season_number,
+                episode_number: r.episode_number,
+                name: r.name,
+                air_date: r.air_date,
+                still_path: r.still_path,
+                score: EpisodeScoreView {
+                    filler_votes: filler,
+                    canon_votes: canon,
+                    filler_score: scoring::filler_score(filler, canon),
+                    status: scoring::status(filler, canon),
+                    my_vote: None, // populated once auth lands
+                },
+            }
+        })
+        .collect())
+}

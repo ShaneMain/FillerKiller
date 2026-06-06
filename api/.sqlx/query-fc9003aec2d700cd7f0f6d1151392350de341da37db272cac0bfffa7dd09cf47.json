@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO season (show_id, season_number, name)\n        VALUES ($1, $2, $3)\n        ON CONFLICT (show_id, season_number) DO UPDATE SET name = EXCLUDED.name\n        RETURNING id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fc9003aec2d700cd7f0f6d1151392350de341da37db272cac0bfffa7dd09cf47"
+}

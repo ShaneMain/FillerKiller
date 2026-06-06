@@ -43,12 +43,38 @@ web/                       React + Vite SPA
 ```bash
 cd api
 cp .env.example .env       # set DATABASE_URL (pooled), TMDB_API_READ_TOKEN, ...
-cargo test                 # runs the scoring unit tests (no DB needed)
+cargo test                 # unit tests; no DB needed (uses the committed .sqlx cache)
 cargo run                  # starts the API on :8080 (applies migrations if DB is reachable)
 ```
 
 You need a PostgreSQL (Neon/Supabase pooled URL recommended) and a TMDB API read
 token (https://www.themoviedb.org/settings/api).
+
+A throwaway local Postgres for development:
+
+```bash
+docker run -d --name fk-pg -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=fillerkiller -p 5433:5432 postgres:16
+export DATABASE_URL="postgres://postgres:postgres@localhost:5433/fillerkiller"
+cargo sqlx migrate run     # apply migrations (needs sqlx-cli)
+```
+
+**Compile-time-checked queries (`sqlx`):** queries are verified against the schema at
+build time. The generated `.sqlx/` cache is committed, so normal builds and CI need
+**no database** (`SQLX_OFFLINE=true`). After changing any SQL query, regenerate it with
+a live dev DB: `cargo sqlx prepare`, and commit the updated `.sqlx/`.
+
+#### Catalog endpoints
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/search?q=` | Proxy TMDB search; annotates imported shows. |
+| `GET` | `/api/shows/{id}` | Show + seasons. `{id}` is our uuid or `tmdb:<n>` (imports on demand). |
+| `GET` | `/api/shows/{id}/episodes?season=` | Episodes with aggregate filler scores. |
+| `GET` | `/health`, `/health/db` | Liveness / DB readiness. |
+
+Catalog responses set `Cache-Control` (longer for static catalog, short for vote-derived
+scores) per the design notes.
 
 ### Web (`web/`)
 

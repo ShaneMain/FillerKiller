@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO episode (\n            show_id, season_id, tmdb_id, season_number, episode_number,\n            name, overview, air_date, still_path\n        )\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)\n        ON CONFLICT (tmdb_id) DO UPDATE SET\n            name = EXCLUDED.name,\n            overview = EXCLUDED.overview,\n            air_date = EXCLUDED.air_date,\n            still_path = EXCLUDED.still_path\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8",
+        "Int4",
+        "Int4",
+        "Text",
+        "Text",
+        "Date",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7ca507711f7839e45500600b1a30171d190c4cdd49331ee59b0e199bab2b60c9"
+}

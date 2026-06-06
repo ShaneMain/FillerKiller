@@ -7,7 +7,7 @@ CREATE TYPE vote_value AS ENUM ('FILLER', 'CANON');
 
 CREATE TABLE show (
     id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tmdb_id        INTEGER NOT NULL UNIQUE,
+    tmdb_id        BIGINT NOT NULL UNIQUE,
     name           TEXT NOT NULL,
     first_air_year INTEGER,
     poster_path    TEXT,
@@ -28,7 +28,7 @@ CREATE TABLE episode (
     id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     show_id        UUID NOT NULL REFERENCES show (id) ON DELETE CASCADE,
     season_id      UUID NOT NULL REFERENCES season (id) ON DELETE CASCADE,
-    tmdb_id        INTEGER NOT NULL UNIQUE,
+    tmdb_id        BIGINT NOT NULL UNIQUE,
     season_number  INTEGER NOT NULL,
     episode_number INTEGER NOT NULL,
     name           TEXT,
