@@ -1,0 +1,6 @@
+# Keep the Docker build context small and the dep-cache layer effective.
+# (Docker does not read .gitignore.)
+target
+.env
+*.env
+!.env.example

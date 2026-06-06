@@ -1,0 +1,19 @@
+# Caddy reverse proxy + static SPA host. Automatic HTTPS for {$DOMAIN}.
+# API and SPA are served same-origin so the SameSite=Lax session cookie works.
+
+{$DOMAIN} {
+	encode gzip
+
+	# API + health endpoints -> the Rust service.
+	@api path /api/* /health /health/*
+	handle @api {
+		reverse_proxy api:8080
+	}
+
+	# Everything else -> the static SPA (SPA-routing fallback to index.html).
+	handle {
+		root * /srv/web
+		try_files {path} /index.html
+		file_server
+	}
+}

@@ -1,9 +1,11 @@
-# Multi-stage build for the FillerKiller API. Produces a small static-ish image
-# suitable for Fly Machines / containers. For AWS Lambda, build with
-# cargo-lambda instead of this Dockerfile.
+# Multi-stage build for the FillerKiller API. Produces a small image suitable for
+# a self-hosted box / containers. Builds offline using the committed
+# .sqlx query cache, so no database is needed at image-build time.
 
 FROM rust:1-slim AS builder
 WORKDIR /app
+# Use the committed sqlx offline cache instead of a live DB at build time.
+ENV SQLX_OFFLINE=true
 
 # Cache dependencies: build against a stub main, then the real sources.
 COPY Cargo.toml Cargo.lock* ./

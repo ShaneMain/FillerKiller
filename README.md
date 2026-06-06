@@ -97,6 +97,12 @@ cp .env.example .env.local # set VITE_API_BASE_URL (defaults to http://localhost
 npm run dev                # http://localhost:5173
 ```
 
+## Deploy
+
+Self-hosted on a single box (Postgres + API + Caddy via Docker Compose) per
+the design notes — you own the data, ~$5/mo, no code changes to scale. See
+[`deploy/README.md`](deploy/README.md).
+
 ## Conventions
 
 - **TMDB token is server-only**, held by the API. The SPA never sees it.

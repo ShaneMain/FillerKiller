@@ -1,0 +1,69 @@
+# Self-hosted FillerKiller stack: Postgres + API + Caddy on one box.
+# Postgres and the API are NOT published to the host — only Caddy is reachable
+# from the internet. Copy .env.example to .env and fill it in before `up`.
+
+name: fillerkiller
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fillerkiller}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-fillerkiller}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fillerkiller}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # No `ports:` — the database stays on the internal network only.
+
+  api:
+    build:
+      context: ../api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-fillerkiller}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-fillerkiller}
+      TMDB_API_READ_TOKEN: ${TMDB_API_READ_TOKEN:?set TMDB_API_READ_TOKEN in .env}
+      TMDB_IMAGE_BASE_URL: ${TMDB_IMAGE_BASE_URL:-https://image.tmdb.org/t/p}
+      CORS_ALLOWED_ORIGIN: https://${DOMAIN}
+      BIND_ADDR: 0.0.0.0:8080
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?set AUTH_JWT_SECRET in .env}
+      AUTH_BASE_URL: https://${DOMAIN}
+      WEB_POST_LOGIN_URL: https://${DOMAIN}
+      AUTH_COOKIE_SECURE: "true"
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+    expose:
+      - "8080"
+    # No `ports:` — only Caddy reaches the API.
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # The built SPA (run `npm run build` in web/ first). Served same-origin.
+      - ../web/dist:/srv/web:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
