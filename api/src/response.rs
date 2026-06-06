@@ -18,3 +18,15 @@ pub fn cacheable_json<T: Serialize>(value: &T, s_maxage: u32) -> Response {
     }
     res
 }
+
+/// JSON response that must NOT be stored by any cache — for per-user data (e.g.
+/// responses carrying `myVote`). A shared cache must never serve one user's
+/// per-user data to another.
+pub fn private_json<T: Serialize>(value: &T) -> Response {
+    let mut res = Json(value).into_response();
+    res.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    res
+}

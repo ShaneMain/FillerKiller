@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            COUNT(*) FILTER (WHERE value = 'FILLER') AS \"filler!\",\n            COUNT(*) FILTER (WHERE value = 'CANON')  AS \"canon!\"\n        FROM vote WHERE episode_id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "filler!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "canon!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "ba2e0d0fcf163cb976ee3c6c4e3a19b42d73a50fa1ac6ace84dbec48b8acbc7f"
+}

@@ -204,11 +204,13 @@ pub async fn seasons_with_counts(
 }
 
 /// Episodes for a show (optionally one season) with aggregated vote counts,
-/// turned into the API view (status derived via the scoring module).
+/// turned into the API view (status derived via the scoring module). When
+/// `user_id` is Some, each episode's `myVote` reflects that user's vote.
 pub async fn episodes_with_scores(
     pool: &PgPool,
     show_id: Uuid,
     season: Option<i32>,
+    user_id: Option<Uuid>,
 ) -> Result<Vec<EpisodeItem>, sqlx::Error> {
     let rows = sqlx::query!(
         r#"
@@ -220,7 +222,9 @@ pub async fn episodes_with_scores(
             e.air_date,
             e.still_path,
             COUNT(v.id) FILTER (WHERE v.value = 'FILLER') AS "filler_votes!",
-            COUNT(v.id) FILTER (WHERE v.value = 'CANON')  AS "canon_votes!"
+            COUNT(v.id) FILTER (WHERE v.value = 'CANON')  AS "canon_votes!",
+            (SELECT mv.value::text FROM vote mv
+             WHERE mv.episode_id = e.id AND mv.user_id = $3) AS "my_vote?"
         FROM episode e
         LEFT JOIN vote v ON v.episode_id = e.id
         WHERE e.show_id = $1 AND ($2::int IS NULL OR e.season_number = $2)
@@ -229,6 +233,7 @@ pub async fn episodes_with_scores(
         "#,
         show_id,
         season,
+        user_id,
     )
     .fetch_all(pool)
     .await?;
@@ -250,9 +255,78 @@ pub async fn episodes_with_scores(
                     canon_votes: canon,
                     filler_score: scoring::filler_score(filler, canon),
                     status: scoring::status(filler, canon),
-                    my_vote: None, // populated once auth lands
+                    my_vote: r.my_vote.as_deref().and_then(scoring::VoteValue::from_db),
                 },
             }
         })
         .collect())
+}
+
+/// Whether an episode exists (for a clean 404 before a vote write).
+pub async fn episode_exists(pool: &PgPool, episode_id: Uuid) -> Result<bool, sqlx::Error> {
+    let exists = sqlx::query_scalar!(
+        "SELECT EXISTS(SELECT 1 FROM episode WHERE id = $1)",
+        episode_id
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(exists.unwrap_or(false))
+}
+
+/// Cast or change a user's vote on an episode (one row per user+episode).
+pub async fn upsert_vote(
+    pool: &PgPool,
+    user_id: Uuid,
+    episode_id: Uuid,
+    value: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        r#"
+        INSERT INTO vote (user_id, episode_id, value)
+        VALUES ($1, $2, ($3::text)::vote_value)
+        ON CONFLICT (user_id, episode_id)
+        DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+        "#,
+        user_id,
+        episode_id,
+        value,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Remove a user's vote. Returns the number of rows deleted (0 if none).
+pub async fn delete_vote(
+    pool: &PgPool,
+    user_id: Uuid,
+    episode_id: Uuid,
+) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query!(
+        "DELETE FROM vote WHERE user_id = $1 AND episode_id = $2",
+        user_id,
+        episode_id,
+    )
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
+/// Aggregate filler/canon counts for one episode.
+pub async fn episode_aggregate(
+    pool: &PgPool,
+    episode_id: Uuid,
+) -> Result<(i64, i64), sqlx::Error> {
+    let row = sqlx::query!(
+        r#"
+        SELECT
+            COUNT(*) FILTER (WHERE value = 'FILLER') AS "filler!",
+            COUNT(*) FILTER (WHERE value = 'CANON')  AS "canon!"
+        FROM vote WHERE episode_id = $1
+        "#,
+        episode_id,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok((row.filler, row.canon))
 }

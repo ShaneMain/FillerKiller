@@ -21,7 +21,7 @@ use std::time::Duration;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use axum_extra::extract::CookieJar;
 use serde::Deserialize;
@@ -32,11 +32,12 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use uuid::Uuid;
 
-use crate::auth::OptionalUser;
+use crate::auth::{CurrentUser, OptionalUser};
 use crate::config::{AuthConfig, Config};
 use crate::error::AppError;
-use crate::models::{SearchItem, SearchResponse, ShowDetail};
-use crate::response::cacheable_json;
+use crate::models::{AggregateView, SearchItem, SearchResponse, ShowDetail, VoteResponse};
+use crate::response::{cacheable_json, private_json};
+use crate::scoring::VoteValue;
 use crate::tmdb::TmdbClient;
 
 /// Shared application state. All fields are cheaply cloneable (pool, clients, and
@@ -93,6 +94,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/search", get(search))
         .route("/api/shows/{id}", get(get_show))
         .route("/api/shows/{id}/episodes", get(get_show_episodes))
+        .route("/api/episodes/{id}/vote", put(put_vote).delete(delete_vote))
         .route("/api/auth/{provider}/login", get(oauth_login))
         .route("/api/auth/{provider}/callback", get(oauth_callback))
         .route("/api/auth/logout", post(logout))
@@ -225,16 +227,84 @@ struct EpisodesParams {
     season: Option<i32>,
 }
 
-/// `GET /api/shows/{id}/episodes?season=` — episodes with aggregate scores.
-/// Scores change with votes, so cache only briefly.
+/// `GET /api/shows/{id}/episodes?season=` — episodes with aggregate scores, and
+/// `myVote` when signed in. Anonymous responses are shared-cacheable briefly
+///; signed-in responses carry per-user data, so they are never cached.
 async fn get_show_episodes(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(params): Query<EpisodesParams>,
+    OptionalUser(user): OptionalUser,
 ) -> Result<Response, AppError> {
     let show_id = import::resolve_show_id(&state, &id).await?;
-    let episodes = db::episodes_with_scores(&state.pool, show_id, params.season).await?;
-    Ok(cacheable_json(&models::EpisodesResponse { episodes }, 60))
+    let user_id = user.as_ref().map(|u| u.id);
+    let episodes = db::episodes_with_scores(&state.pool, show_id, params.season, user_id).await?;
+    let body = models::EpisodesResponse { episodes };
+    Ok(match user_id {
+        Some(_) => private_json(&body),
+        None => cacheable_json(&body, 60),
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct VoteBody {
+    value: VoteValue,
+}
+
+/// Build the vote response (caller's vote + fresh aggregate) for an episode.
+async fn vote_response(
+    state: &AppState,
+    episode_id: Uuid,
+    my_vote: Option<VoteValue>,
+) -> Result<VoteResponse, AppError> {
+    let (filler, canon) = db::episode_aggregate(&state.pool, episode_id).await?;
+    Ok(VoteResponse {
+        my_vote,
+        score: AggregateView {
+            filler_votes: filler,
+            canon_votes: canon,
+            filler_score: scoring::filler_score(filler, canon),
+            status: scoring::status(filler, canon),
+        },
+    })
+}
+
+/// `PUT /api/episodes/{id}/vote` — cast or change the caller's vote. Auth required.
+async fn put_vote(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    user: CurrentUser,
+    // `Result<..>` so a malformed/invalid body returns our JSON error shape
+    // (400) instead of Axum's default plain-text 422.
+    body: Result<Json<VoteBody>, axum::extract::rejection::JsonRejection>,
+) -> Result<Response, AppError> {
+    let Json(body) = body.map_err(|e| AppError::BadRequest(e.body_text()))?;
+    let episode_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest(format!("invalid episode id: {id:?}")))?;
+    if !db::episode_exists(&state.pool, episode_id).await? {
+        return Err(AppError::NotFound(format!("episode {episode_id} not found")));
+    }
+
+    db::upsert_vote(&state.pool, user.id, episode_id, body.value.as_db()).await?;
+    let resp = vote_response(&state, episode_id, Some(body.value)).await?;
+    Ok(private_json(&resp))
+}
+
+/// `DELETE /api/episodes/{id}/vote` — remove the caller's vote. Auth required.
+async fn delete_vote(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    user: CurrentUser,
+) -> Result<Response, AppError> {
+    let episode_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest(format!("invalid episode id: {id:?}")))?;
+    if !db::episode_exists(&state.pool, episode_id).await? {
+        return Err(AppError::NotFound(format!("episode {episode_id} not found")));
+    }
+
+    db::delete_vote(&state.pool, user.id, episode_id).await?;
+    let resp = vote_response(&state, episode_id, None).await?;
+    Ok(private_json(&resp))
 }
 
 // ---- Auth -------------------------

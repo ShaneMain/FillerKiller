@@ -53,7 +53,7 @@ pub struct EpisodeScoreView {
     pub canon_votes: i64,
     pub filler_score: Option<f64>,
     pub status: EpisodeStatus,
-    /// The current user's vote. Always null until auth lands.
+    /// The current user's vote on this episode; null when not signed in.
     pub my_vote: Option<VoteValue>,
 }
 
@@ -72,4 +72,23 @@ pub struct EpisodeItem {
 #[derive(Debug, Serialize)]
 pub struct EpisodesResponse {
     pub episodes: Vec<EpisodeItem>,
+}
+
+/// Aggregate for a single episode, returned by the vote endpoints (no `myVote`
+/// inside — that's a sibling field on the vote response).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AggregateView {
+    pub filler_votes: i64,
+    pub canon_votes: i64,
+    pub filler_score: Option<f64>,
+    pub status: EpisodeStatus,
+}
+
+/// Response to PUT/DELETE vote: the caller's current vote + the new aggregate.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoteResponse {
+    pub my_vote: Option<VoteValue>,
+    pub score: AggregateView,
 }

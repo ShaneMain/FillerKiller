@@ -4,12 +4,13 @@
 //!. The threshold constants MUST match that document —
 //! changing them is a spec change. Pure functions only: no I/O, no DB.
 
-// Foundation: the scoring API is fully implemented and unit-tested but not yet
-// consumed by an endpoint, so the non-test binary sees it as dead. Remove this
-// once the vote / episodes / skip-guide endpoints are wired up.
+// The scoring/aggregate API is consumed by the catalog + vote endpoints; the
+// skip-guide types (build_skip_guide, SkipGuide, ...) are implemented and tested
+// but not yet wired to an endpoint, so the binary sees those as dead. Remove
+// this once the skip-guide endpoint lands.
 #![allow(dead_code)]
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Minimum total votes before we show a confident label at all.
 pub const MIN_VOTES: i64 = 5;
@@ -18,12 +19,32 @@ pub const CANON_BELOW: f64 = 0.4;
 /// fillerScore strictly above this → Filler.
 pub const FILLER_ABOVE: f64 = 0.6;
 
-/// A user's vote. Consumed by the vote endpoint (wired up next).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// A user's vote. Wire format is `FILLER`/`CANON` (request body + responses);
+/// the same strings are the Postgres `vote_value` enum labels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum VoteValue {
     Filler,
     Canon,
+}
+
+impl VoteValue {
+    /// The Postgres `vote_value` label for this vote.
+    pub fn as_db(&self) -> &'static str {
+        match self {
+            VoteValue::Filler => "FILLER",
+            VoteValue::Canon => "CANON",
+        }
+    }
+
+    /// Parse a Postgres `vote_value` label back into a `VoteValue`.
+    pub fn from_db(s: &str) -> Option<Self> {
+        match s {
+            "FILLER" => Some(VoteValue::Filler),
+            "CANON" => Some(VoteValue::Canon),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM vote WHERE user_id = $1 AND episode_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bd13bbe7c21c4b11cc2577f46f59020501cabb65bdc3784e7aeb73651680bde7"
+}

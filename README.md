@@ -70,7 +70,9 @@ a live dev DB: `cargo sqlx prepare`, and commit the updated `.sqlx/`.
 |---|---|---|
 | `GET` | `/api/search?q=` | Proxy TMDB search; annotates imported shows. |
 | `GET` | `/api/shows/{id}` | Show + seasons. `{id}` is our uuid or `tmdb:<n>` (imports on demand). |
-| `GET` | `/api/shows/{id}/episodes?season=` | Episodes with aggregate filler scores. |
+| `GET` | `/api/shows/{id}/episodes?season=` | Episodes with aggregate scores; `myVote` when signed in. |
+| `PUT` | `/api/episodes/{id}/vote` | Cast/change vote `{ "value": "FILLER"\|"CANON" }`. Auth required. |
+| `DELETE` | `/api/episodes/{id}/vote` | Remove the caller's vote. Auth required. |
 | `GET` | `/api/auth/{provider}/login` | OAuth sign-in (`google`/`github`). |
 | `GET` | `/api/auth/{provider}/callback` | OAuth callback → sets session cookie. |
 | `POST` | `/api/auth/logout` | Clear the session. |
