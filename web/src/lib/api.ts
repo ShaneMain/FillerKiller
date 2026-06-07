@@ -59,6 +59,21 @@ export interface VoteResult {
   score: Omit<EpisodeScore, "myVote">;
 }
 
+export interface SkipGuideEntry {
+  episodeId: string;
+  seasonNumber: number;
+  episodeNumber: number;
+  name: string | null;
+  status: EpisodeStatus;
+}
+
+export interface SkipGuide {
+  watch: SkipGuideEntry[];
+  optional: SkipGuideEntry[];
+  skipped: SkipGuideEntry[];
+  thresholds: { minVotes: number; contestedMargin: number };
+}
+
 export interface Me {
   id: string;
   email: string;
@@ -108,6 +123,13 @@ export function getShow(id: string): Promise<ShowDetail> {
 export function getEpisodes(id: string, season?: number): Promise<{ episodes: Episode[] }> {
   const q = season != null ? `?season=${season}` : "";
   return request(`/shows/${encodeURIComponent(id)}/episodes${q}`);
+}
+
+export function getSkipGuide(
+  id: string,
+  contested: "canon" | "filler" | "show" = "canon",
+): Promise<SkipGuide> {
+  return request(`/shows/${encodeURIComponent(id)}/skip-guide?contested=${contested}`);
 }
 
 export function castVote(episodeId: string, value: VoteValue): Promise<VoteResult> {

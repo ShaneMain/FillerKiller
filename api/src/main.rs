@@ -37,7 +37,7 @@ use crate::config::{AuthConfig, Config};
 use crate::error::AppError;
 use crate::models::{AggregateView, SearchItem, SearchResponse, ShowDetail, VoteResponse};
 use crate::response::{cacheable_json, private_json};
-use crate::scoring::VoteValue;
+use crate::scoring::{build_skip_guide, ContestedHandling, ScoredEpisode, VoteValue};
 use crate::tmdb::TmdbClient;
 
 /// Shared application state. All fields are cheaply cloneable (pool, clients, and
@@ -94,6 +94,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/search", get(search))
         .route("/api/shows/{id}", get(get_show))
         .route("/api/shows/{id}/episodes", get(get_show_episodes))
+        .route("/api/shows/{id}/skip-guide", get(get_skip_guide))
         .route("/api/episodes/{id}/vote", put(put_vote).delete(delete_vote))
         .route("/api/auth/{provider}/login", get(oauth_login))
         .route("/api/auth/{provider}/callback", get(oauth_callback))
@@ -244,6 +245,49 @@ async fn get_show_episodes(
         Some(_) => private_json(&body),
         None => cacheable_json(&body, 60),
     })
+}
+
+#[derive(Debug, Deserialize)]
+struct SkipGuideParams {
+    /// How to place CONTESTED / NOT_ENOUGH_VOTES episodes: canon (default) | filler | show.
+    contested: Option<String>,
+    /// Include specials (season 0) in the guide. Default false.
+    specials: Option<bool>,
+}
+
+/// `GET /api/shows/{id}/skip-guide` — the canon-only watch order (+ optional and
+/// skipped lists) for a show. Derived from current votes, so cached briefly.
+async fn get_skip_guide(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(params): Query<SkipGuideParams>,
+) -> Result<Response, AppError> {
+    let contested = match params.contested.as_deref() {
+        None | Some("canon") => ContestedHandling::Canon,
+        Some("filler") => ContestedHandling::Filler,
+        Some("show") => ContestedHandling::Show,
+        Some(other) => {
+            return Err(AppError::BadRequest(format!("invalid contested value: {other:?}")))
+        }
+    };
+
+    let show_id = import::resolve_show_id(&state, &id).await?;
+    let episodes = db::episodes_with_scores(&state.pool, show_id, None, None).await?;
+    let scored: Vec<ScoredEpisode> = episodes
+        .into_iter()
+        .map(|e| ScoredEpisode {
+            episode_id: e.id.to_string(),
+            season_number: e.season_number,
+            episode_number: e.episode_number,
+            name: e.name,
+            filler_votes: e.score.filler_votes,
+            worth_watching_votes: e.score.worth_watching_votes,
+            canon_votes: e.score.canon_votes,
+        })
+        .collect();
+
+    let guide = build_skip_guide(&scored, contested, params.specials.unwrap_or(false));
+    Ok(cacheable_json(&guide, 60))
 }
 
 #[derive(Debug, Deserialize)]

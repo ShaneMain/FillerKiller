@@ -4,11 +4,6 @@
 //!. The constants MUST match that document — changing them
 //! is a spec change. Pure functions only: no I/O, no DB.
 
-// The scoring/aggregate API is consumed by the catalog + vote endpoints; the
-// skip-guide types are implemented and tested but not yet wired to an endpoint,
-// so the binary sees those as dead. Remove this once the skip-guide endpoint lands.
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 
 /// Minimum total votes before we show a confident label at all.

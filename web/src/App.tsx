@@ -3,6 +3,7 @@ import { AuthProvider } from "./lib/auth";
 import { Header } from "./components/Header";
 import { SearchPage } from "./pages/SearchPage";
 import { ShowPage } from "./pages/ShowPage";
+import { SkipGuidePage } from "./pages/SkipGuidePage";
 
 export default function App() {
   return (
@@ -13,6 +14,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<SearchPage />} />
             <Route path="/shows/:id" element={<ShowPage />} />
+            <Route path="/shows/:id/skip-guide" element={<SkipGuidePage />} />
           </Routes>
         </div>
       </AuthProvider>
