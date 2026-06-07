@@ -22,7 +22,7 @@ use std::time::Duration;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{any, get, post, put};
 use axum::{Json, Router};
 use axum_extra::extract::CookieJar;
 use serde::Deserialize;
@@ -30,6 +30,7 @@ use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tower_http::cors::CorsLayer;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use uuid::Uuid;
 
@@ -129,8 +130,7 @@ async fn main() -> anyhow::Result<()> {
             rate_limit::limit_votes,
         ));
 
-    let app = Router::new()
-        .route("/", get(root))
+    let mut app = Router::new()
         .route("/health", get(health))
         .route("/health/db", get(health_db))
         .route("/api/search", get(search))
@@ -142,6 +142,29 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/auth/{provider}/callback", get(oauth_callback))
         .route("/api/auth/logout", post(logout))
         .route("/api/me", get(me))
+        // Unknown /api paths return our JSON 404 (not the SPA shell), so a
+        // mistyped/removed endpoint can't return 200 HTML and break the client's
+        // JSON parsing. Specific routes above take precedence over this catch-all.
+        .route("/api/{*rest}", any(api_not_found));
+
+    // Serve the built SPA same-origin as a fallback when configured (one service
+    // on Cloud Run); otherwise expose API service-info at "/" (the box serves the
+    // SPA via Caddy). ServeDir falls back to index.html so client-side routes
+    // resolve to the app shell.
+    app = match config.static_dir.as_deref() {
+        Some(dir) if std::path::Path::new(dir).is_dir() => {
+            let index = ServeFile::new(format!("{dir}/index.html"));
+            tracing::info!("serving SPA from {dir}");
+            app.fallback_service(ServeDir::new(dir).fallback(index))
+        }
+        Some(dir) => {
+            tracing::warn!("STATIC_DIR {dir:?} not found; serving API only");
+            app.route("/", get(root))
+        }
+        None => app.route("/", get(root)),
+    };
+
+    let app = app
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -210,6 +233,12 @@ async fn root() -> impl IntoResponse {
         "version": env!("CARGO_PKG_VERSION"),
         "docs": "see internal docs",
     }))
+}
+
+/// JSON 404 for unknown `/api/*` paths, so they return our error shape instead
+/// of falling through to the SPA shell (which would be 200 HTML).
+async fn api_not_found() -> AppError {
+    AppError::NotFound("no such API endpoint".into())
 }
 
 /// Liveness: process is up. Does not touch the database.

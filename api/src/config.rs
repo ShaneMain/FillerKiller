@@ -23,6 +23,10 @@ pub struct Config {
     pub run_migrations_on_boot: bool,
     /// Max vote writes per client IP per minute.
     pub vote_rate_per_minute: u32,
+    /// Directory of the built SPA to serve as a fallback (same-origin SPA+API on
+    /// one service, e.g. Cloud Run). Unset → don't serve static files (the box
+    /// deploy serves the SPA via Caddy instead).
+    pub static_dir: Option<String>,
     /// Auth settings (OAuth + JWT). See the design notes.
     pub auth: AuthConfig,
 }
@@ -70,6 +74,7 @@ impl Config {
             vote_rate_per_minute: optional("VOTE_RATE_PER_MINUTE", "30")
                 .parse()
                 .unwrap_or(30),
+            static_dir: std::env::var("STATIC_DIR").ok().filter(|s| !s.trim().is_empty()),
             auth: AuthConfig {
                 jwt_secret,
                 base_url: optional("AUTH_BASE_URL", "http://localhost:8080"),

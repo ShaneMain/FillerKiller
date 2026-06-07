@@ -1,0 +1,13 @@
+# What NOT to upload to Cloud Build for `gcloud run deploy --source .`.
+# (Present → gcloud uses this instead of .gitignore.) Keep api/.sqlx and the
+# Dockerfile; drop build artifacts, deps, secrets, and tooling cruft.
+.git
+.gitignore
+**/target/
+**/node_modules/
+web/dist/
+deploy/
+**/*.env
+!**/*.env.example
+.playwright-mcp/
+**/.DS_Store

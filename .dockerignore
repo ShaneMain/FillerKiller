@@ -1,0 +1,11 @@
+# Keep the Docker build context small. The root Dockerfile only needs api/ and
+# web/ sources; the committed api/.sqlx cache MUST stay (offline build).
+.git
+**/target
+**/node_modules
+web/dist
+deploy
+**/*.env
+!**/*.env.example
+.playwright-mcp
+**/.DS_Store
