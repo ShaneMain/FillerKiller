@@ -26,9 +26,35 @@ export function SearchPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8">
-      <h1 className="mb-2 text-2xl font-bold">Find a show</h1>
-      <p className="mb-5 text-sm text-zinc-400">
-        Search a TV series, then vote on which episodes are filler.
+      <section className="mb-8">
+        <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
+          Skip the <span className="text-rose-500">filler</span>.
+        </h1>
+        <p className="mt-3 max-w-2xl text-zinc-300">
+          FillerKiller is a crowd-sourced guide to which TV episodes are actually worth
+          your time. For every episode, viewers vote{" "}
+          <span className="font-medium text-rose-400">Filler</span>,{" "}
+          <span className="font-medium text-sky-400">Worth It</span>, or{" "}
+          <span className="font-medium text-emerald-400">Canon</span> — so you can see at a
+          glance what to skip, what's optional, and what's essential to the story.
+        </p>
+        <ul className="mt-5 grid gap-2 sm:grid-cols-3">
+          {[
+            ["Vote per episode", "Filler · Worth It · Canon — one vote per person."],
+            ["See the ratio", "At-a-glance vote bars and a confident status."],
+            ["Skip guide", "A binge-ready watch order that drops the fluff."],
+          ].map(([title, body]) => (
+            <li key={title} className="rounded-lg border border-zinc-800 bg-zinc-900 p-3">
+              <div className="text-sm font-semibold text-zinc-100">{title}</div>
+              <div className="mt-0.5 text-xs text-zinc-400">{body}</div>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <h2 className="mb-1 text-lg font-semibold">Find a show</h2>
+      <p className="mb-4 text-sm text-zinc-400">
+        Search a TV series to see the community's verdict and add your votes.
       </p>
 
       <form onSubmit={onSubmit} className="flex gap-2">

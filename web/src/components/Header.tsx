@@ -1,5 +1,4 @@
 import { Link } from "react-router-dom";
-import { loginUrl } from "../lib/api";
 import { useAuth } from "../lib/auth";
 
 export function Header() {
@@ -25,20 +24,12 @@ export function Header() {
               </button>
             </div>
           ) : (
-            <div className="flex items-center gap-2">
-              <a
-                href={loginUrl("github")}
-                className="rounded-md border border-zinc-700 px-2.5 py-1 text-zinc-200 hover:bg-zinc-800"
-              >
-                Sign in with GitHub
-              </a>
-              <a
-                href={loginUrl("google")}
-                className="rounded-md border border-zinc-700 px-2.5 py-1 text-zinc-200 hover:bg-zinc-800"
-              >
-                Google
-              </a>
-            </div>
+            <Link
+              to="/login"
+              className="rounded-md border border-zinc-700 px-3 py-1 text-zinc-200 hover:bg-zinc-800"
+            >
+              Sign in
+            </Link>
           )}
         </div>
       </div>

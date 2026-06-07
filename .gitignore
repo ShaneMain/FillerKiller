@@ -13,3 +13,6 @@
 
 # Playwright MCP test artifacts
 .playwright-mcp/
+
+# Ad-hoc review screenshots dropped in the repo root
+/*.png

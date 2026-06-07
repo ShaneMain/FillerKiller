@@ -75,7 +75,15 @@ impl From<TmdbError> for AppError {
     fn from(e: TmdbError) -> Self {
         match e {
             TmdbError::RateLimited => AppError::UpstreamRateLimited,
-            other => AppError::Upstream(other.to_string()),
+            // A missing show/season is a clean 404 for the client — don't leak the
+            // upstream TMDB path/status into the response.
+            TmdbError::Status { status, .. } if status.as_u16() == 404 => {
+                AppError::NotFound("we couldn't find that show".to_string())
+            }
+            other => {
+                tracing::warn!("TMDB upstream error: {other}");
+                AppError::Upstream("the TV database is unavailable; try again shortly".to_string())
+            }
         }
     }
 }

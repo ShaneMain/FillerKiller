@@ -54,7 +54,7 @@ export function SkipGuidePage() {
       {guide && (
         <div className="mt-6 space-y-6">
           <Bucket title="Watch" tone="emerald" entries={guide.watch} />
-          <Bucket title="Optional — worth watching" tone="sky" entries={guide.optional} />
+          <Bucket title="Optional — worth it" tone="sky" entries={guide.optional} />
           <Bucket title="Skip" tone="rose" entries={guide.skipped} />
         </div>
       )}

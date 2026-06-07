@@ -4,6 +4,8 @@ import { Header } from "./components/Header";
 import { SearchPage } from "./pages/SearchPage";
 import { ShowPage } from "./pages/ShowPage";
 import { SkipGuidePage } from "./pages/SkipGuidePage";
+import { LoginPage } from "./pages/LoginPage";
+import { NotFoundPage } from "./pages/NotFoundPage";
 
 export default function App() {
   return (
@@ -13,8 +15,10 @@ export default function App() {
           <Header />
           <Routes>
             <Route path="/" element={<SearchPage />} />
+            <Route path="/login" element={<LoginPage />} />
             <Route path="/shows/:id" element={<ShowPage />} />
             <Route path="/shows/:id/skip-guide" element={<SkipGuidePage />} />
+            <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </div>
       </AuthProvider>

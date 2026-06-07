@@ -71,8 +71,14 @@ export function ShowPage() {
     <div className="mx-auto max-w-3xl px-4 py-8">
       <Link to="/" className="mb-4 inline-block text-sm text-zinc-400 hover:text-zinc-200">← Search</Link>
 
-      <div className="flex gap-4">
-        {poster && <img src={poster} alt="" className="h-36 w-24 shrink-0 rounded object-cover" />}
+      <div className="flex flex-col gap-4 sm:flex-row">
+        {poster && (
+          <img
+            src={poster}
+            alt={`${show.name} poster`}
+            className="h-36 w-24 shrink-0 rounded object-cover"
+          />
+        )}
         <div className="min-w-0">
           <h1 className="text-2xl font-bold">{show.name}</h1>
           {show.overview && <p className="mt-2 text-sm text-zinc-400 line-clamp-4">{show.overview}</p>}
@@ -90,7 +96,10 @@ export function ShowPage() {
 
       {!user && (
         <p className="mt-5 rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-400">
-          Sign in (top right) to vote on episodes.
+          <Link to="/login" className="font-medium text-rose-400 hover:text-rose-300">
+            Sign in
+          </Link>{" "}
+          to vote on episodes.
         </p>
       )}
 
@@ -110,11 +119,12 @@ export function ShowPage() {
 
       <div className="mt-5 flex items-center gap-4 text-xs text-zinc-500">
         <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-rose-500" />Filler</span>
-        <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-sky-500" />Worth it</span>
+        <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-sky-500" />Worth It</span>
         <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-emerald-500" />Canon</span>
       </div>
 
       <div className="mt-2">
+        <h2 className="sr-only">Episodes{season != null ? ` — Season ${season}` : ""}</h2>
         {loadingEps && <p className="text-zinc-400">Loading episodes…</p>}
         {episodes?.map((ep) => (
           <EpisodeRow key={ep.id} episode={ep} signedIn={!!user} />
