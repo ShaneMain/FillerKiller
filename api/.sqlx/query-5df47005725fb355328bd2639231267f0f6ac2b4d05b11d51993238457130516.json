@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            COUNT(*) FILTER (WHERE value = 'FILLER')         AS \"filler!\",\n            COUNT(*) FILTER (WHERE value = 'WORTH_WATCHING') AS \"worth_watching!\",\n            COUNT(*) FILTER (WHERE value = 'CANON')          AS \"canon!\"\n        FROM vote WHERE episode_id = $1\n        ",
+  "query": "\n        SELECT\n            filler_votes::bigint         AS \"filler!\",\n            worth_watching_votes::bigint AS \"worth_watching!\",\n            canon_votes::bigint          AS \"canon!\"\n        FROM episode_score WHERE episode_id = $1\n        ",
   "describe": {
     "columns": [
       {
@@ -30,5 +30,5 @@
       null
     ]
   },
-  "hash": "40656c36ccd85e190f9d514b8a0155193c354bc33f86b05dd92fc5a072d3c496"
+  "hash": "5df47005725fb355328bd2639231267f0f6ac2b4d05b11d51993238457130516"
 }

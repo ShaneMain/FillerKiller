@@ -10,6 +10,7 @@ mod error;
 mod import;
 mod models;
 mod oauth;
+mod rate_limit;
 mod response;
 mod scoring;
 mod tmdb;
@@ -36,7 +37,8 @@ use crate::auth::{CurrentUser, OptionalUser};
 use crate::config::{AuthConfig, Config};
 use crate::error::AppError;
 use crate::models::{AggregateView, SearchItem, SearchResponse, ShowDetail, VoteResponse};
-use crate::response::{cacheable_json, private_json};
+use crate::rate_limit::IpRateLimiter;
+use crate::response::{cacheable_json, private_json, TTL_AGGREGATE, TTL_CATALOG, TTL_SEARCH};
 use crate::scoring::{build_skip_guide, ContestedHandling, ScoredEpisode, VoteValue};
 use crate::tmdb::TmdbClient;
 
@@ -49,6 +51,8 @@ pub struct AppState {
     /// Shared HTTP client for outbound calls (OAuth token/userinfo).
     pub http: reqwest::Client,
     pub auth: Arc<AuthConfig>,
+    /// Per-IP vote rate limiter (in-memory, per-instance). See `rate_limit`.
+    pub rate_limiter: Arc<IpRateLimiter>,
 }
 
 #[tokio::main]
@@ -58,6 +62,17 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::from_env()?;
 
+    // Maintenance subcommands run an explicit step and exit, so ephemeral /
+    // multi-instance deploys don't do schema work on every cold start.
+    match std::env::args().nth(1).as_deref() {
+        Some("migrate") => return run_migrate(&config).await,
+        Some("recompute-scores") => return run_recompute_scores(&config).await,
+        Some(other) => anyhow::bail!(
+            "unknown subcommand {other:?}; expected `migrate` or `recompute-scores`"
+        ),
+        None => {}
+    }
+
     // Lazy connect: the binary boots without a live DB, and serverless Postgres
     // can be cold. Keep the pool small — serverless Postgres caps connections.
     let pool = PgPoolOptions::new()
@@ -65,11 +80,15 @@ async fn main() -> anyhow::Result<()> {
         .acquire_timeout(Duration::from_secs(10))
         .connect_lazy(&config.database_url)?;
 
-    // Best-effort migrations on boot. If the DB is unreachable we still serve
-    // liveness; readiness (/health/db) will report the problem.
-    match sqlx::migrate!("./migrations").run(&pool).await {
-        Ok(_) => tracing::info!("migrations applied"),
-        Err(e) => tracing::warn!("migrations skipped/failed (DB unreachable?): {e}"),
+    // Migrations are an explicit deploy step by default (`migrate` subcommand).
+    // A single-instance box can opt into boot migrations for a one-command deploy.
+    if config.run_migrations_on_boot {
+        match sqlx::migrate!("./migrations").run(&pool).await {
+            Ok(_) => tracing::info!("migrations applied on boot"),
+            Err(e) => tracing::warn!("boot migration skipped/failed (DB unreachable?): {e}"),
+        }
+    } else {
+        tracing::info!("skipping boot migrations; run the `migrate` subcommand as a deploy step");
     }
 
     let http = reqwest::Client::new();
@@ -85,7 +104,30 @@ async fn main() -> anyhow::Result<()> {
         tmdb,
         http,
         auth: Arc::new(config.auth.clone()),
+        rate_limiter: rate_limit::ip_limiter(config.vote_rate_per_minute),
     };
+
+    // Evict idle per-IP buckets periodically so the keyed limiter doesn't grow
+    // unbounded on a long-lived instance (a no-op on short-lived serverless ones).
+    {
+        let limiter = state.rate_limiter.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(300));
+            loop {
+                tick.tick().await;
+                limiter.retain_recent();
+            }
+        });
+    }
+
+    // Vote writes carry an extra per-IP rate-limit layer (defense in depth; the
+    // edge CDN is the authoritative limiter — see `rate_limit`).
+    let vote_routes = Router::new()
+        .route("/api/episodes/{id}/vote", put(put_vote).delete(delete_vote))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            rate_limit::limit_votes,
+        ));
 
     let app = Router::new()
         .route("/", get(root))
@@ -95,7 +137,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/shows/{id}", get(get_show))
         .route("/api/shows/{id}/episodes", get(get_show_episodes))
         .route("/api/shows/{id}/skip-guide", get(get_skip_guide))
-        .route("/api/episodes/{id}/vote", put(put_vote).delete(delete_vote))
+        .merge(vote_routes)
         .route("/api/auth/{provider}/login", get(oauth_login))
         .route("/api/auth/{provider}/callback", get(oauth_callback))
         .route("/api/auth/logout", post(logout))
@@ -116,6 +158,35 @@ fn init_tracing() {
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .with(fmt::layer())
         .init();
+}
+
+/// Connect eagerly for one-shot subcommands so they fail loudly if the DB is
+/// unreachable (unlike the server's lazy pool).
+async fn connect_pool(config: &Config) -> anyhow::Result<PgPool> {
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(30))
+        .connect(&config.database_url)
+        .await?;
+    Ok(pool)
+}
+
+/// `migrate` subcommand: apply pending migrations, then exit. Run this as an
+/// explicit deploy step for ephemeral/multi-instance compute.
+async fn run_migrate(config: &Config) -> anyhow::Result<()> {
+    let pool = connect_pool(config).await?;
+    sqlx::migrate!("./migrations").run(&pool).await?;
+    tracing::info!("migrations applied");
+    Ok(())
+}
+
+/// `recompute-scores` subcommand: rebuild `episode_score` from the source votes,
+/// then exit. Drift correction / backfill; safe to run on a schedule.
+async fn run_recompute_scores(config: &Config) -> anyhow::Result<()> {
+    let pool = connect_pool(config).await?;
+    let n = db::recompute_all_scores(&pool).await?;
+    tracing::info!("recomputed episode_score for {n} episode(s)");
+    Ok(())
 }
 
 fn build_cors(origin: &str) -> CorsLayer {
@@ -197,7 +268,7 @@ async fn search(
         })
         .collect();
 
-    Ok(cacheable_json(&SearchResponse { results }, 600))
+    Ok(cacheable_json(&SearchResponse { results }, TTL_SEARCH))
 }
 
 /// `GET /api/shows/{id}` — show detail with seasons. `{id}` is our uuid, or
@@ -220,7 +291,7 @@ async fn get_show(
         poster_path: core.poster_path,
         seasons,
     };
-    Ok(cacheable_json(&detail, 3600))
+    Ok(cacheable_json(&detail, TTL_CATALOG))
 }
 
 #[derive(Debug, Deserialize)]
@@ -243,7 +314,7 @@ async fn get_show_episodes(
     let body = models::EpisodesResponse { episodes };
     Ok(match user_id {
         Some(_) => private_json(&body),
-        None => cacheable_json(&body, 60),
+        None => cacheable_json(&body, TTL_AGGREGATE),
     })
 }
 
@@ -287,7 +358,7 @@ async fn get_skip_guide(
         .collect();
 
     let guide = build_skip_guide(&scored, contested, params.specials.unwrap_or(false));
-    Ok(cacheable_json(&guide, 60))
+    Ok(cacheable_json(&guide, TTL_AGGREGATE))
 }
 
 #[derive(Debug, Deserialize)]

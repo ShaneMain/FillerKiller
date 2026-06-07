@@ -206,6 +206,12 @@ pub async fn seasons_with_counts(
 /// Episodes for a show (optionally one season) with aggregated vote counts,
 /// turned into the API view (status derived via the scoring module). When
 /// `user_id` is Some, each episode's `myVote` reflects that user's vote.
+///
+/// Reads the maintained `episode_score` tally (one indexed row per episode,
+/// kept current by triggers) rather than aggregating the `vote` table on every
+/// request — the read-path scaling lever in the design notes. A missing score row
+/// (episode with no votes yet) COALESCEs to zero. `myVote` is per-user and
+/// can't be precomputed, so it stays a single correlated lookup.
 pub async fn episodes_with_scores(
     pool: &PgPool,
     show_id: Uuid,
@@ -221,15 +227,14 @@ pub async fn episodes_with_scores(
             e.name,
             e.air_date,
             e.still_path,
-            COUNT(v.id) FILTER (WHERE v.value = 'FILLER')         AS "filler_votes!",
-            COUNT(v.id) FILTER (WHERE v.value = 'WORTH_WATCHING') AS "worth_watching_votes!",
-            COUNT(v.id) FILTER (WHERE v.value = 'CANON')          AS "canon_votes!",
+            COALESCE(es.filler_votes, 0)::bigint         AS "filler_votes!",
+            COALESCE(es.worth_watching_votes, 0)::bigint AS "worth_watching_votes!",
+            COALESCE(es.canon_votes, 0)::bigint          AS "canon_votes!",
             (SELECT mv.value::text FROM vote mv
              WHERE mv.episode_id = e.id AND mv.user_id = $3) AS "my_vote?"
         FROM episode e
-        LEFT JOIN vote v ON v.episode_id = e.id
+        LEFT JOIN episode_score es ON es.episode_id = e.id
         WHERE e.show_id = $1 AND ($2::int IS NULL OR e.season_number = $2)
-        GROUP BY e.id
         ORDER BY e.season_number, e.episode_number
         "#,
         show_id,
@@ -313,7 +318,10 @@ pub async fn delete_vote(
     Ok(res.rows_affected())
 }
 
-/// Aggregate (filler, worth_watching, canon) vote counts for one episode.
+/// Aggregate (filler, worth_watching, canon) vote counts for one episode, read
+/// from the maintained `episode_score` tally. A vote write fires the trigger
+/// that refreshes this row in the same transaction, so the vote endpoints read
+/// back fresh counts. A missing row (no votes) is reported as zeros.
 pub async fn episode_aggregate(
     pool: &PgPool,
     episode_id: Uuid,
@@ -321,14 +329,50 @@ pub async fn episode_aggregate(
     let row = sqlx::query!(
         r#"
         SELECT
-            COUNT(*) FILTER (WHERE value = 'FILLER')         AS "filler!",
-            COUNT(*) FILTER (WHERE value = 'WORTH_WATCHING') AS "worth_watching!",
-            COUNT(*) FILTER (WHERE value = 'CANON')          AS "canon!"
-        FROM vote WHERE episode_id = $1
+            filler_votes::bigint         AS "filler!",
+            worth_watching_votes::bigint AS "worth_watching!",
+            canon_votes::bigint          AS "canon!"
+        FROM episode_score WHERE episode_id = $1
         "#,
         episode_id,
     )
-    .fetch_one(pool)
+    .fetch_optional(pool)
     .await?;
-    Ok((row.filler, row.worth_watching, row.canon))
+    Ok(row.map_or((0, 0, 0), |r| (r.filler, r.worth_watching, r.canon)))
+}
+
+/// Rebuild the entire `episode_score` table from the source `vote` rows. The
+/// triggers keep it consistent in normal operation; this is the drift-correction
+/// / backfill path, run as the `recompute-scores` subcommand (e.g. on a
+/// schedule or after a bulk import). Returns the number of episodes written.
+pub async fn recompute_all_scores(pool: &PgPool) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query!(
+        r#"
+        INSERT INTO episode_score (
+            episode_id, filler_votes, worth_watching_votes, canon_votes,
+            filler_score, updated_at
+        )
+        SELECT
+            e.id,
+            COUNT(v.id) FILTER (WHERE v.value = 'FILLER'),
+            COUNT(v.id) FILTER (WHERE v.value = 'WORTH_WATCHING'),
+            COUNT(v.id) FILTER (WHERE v.value = 'CANON'),
+            CASE WHEN COUNT(v.id) = 0 THEN NULL
+                 ELSE COUNT(v.id) FILTER (WHERE v.value = 'FILLER')::float8 / COUNT(v.id)
+            END,
+            now()
+        FROM episode e
+        LEFT JOIN vote v ON v.episode_id = e.id
+        GROUP BY e.id
+        ON CONFLICT (episode_id) DO UPDATE SET
+            filler_votes         = EXCLUDED.filler_votes,
+            worth_watching_votes = EXCLUDED.worth_watching_votes,
+            canon_votes          = EXCLUDED.canon_votes,
+            filler_score         = EXCLUDED.filler_score,
+            updated_at           = EXCLUDED.updated_at
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
 }

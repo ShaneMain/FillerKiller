@@ -14,6 +14,8 @@ pub enum AppError {
     BadRequest(String),
     /// Missing or invalid session.
     Unauthorized,
+    /// Client exceeded the vote rate limit.
+    RateLimited,
     /// Upstream (TMDB) failure.
     Upstream(String),
     /// Upstream asked us to back off.
@@ -31,6 +33,11 @@ impl AppError {
                 StatusCode::UNAUTHORIZED,
                 "unauthorized",
                 "authentication required".to_string(),
+            ),
+            AppError::RateLimited => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limited",
+                "too many requests; slow down".to_string(),
             ),
             AppError::Upstream(m) => (StatusCode::BAD_GATEWAY, "upstream_error", m.clone()),
             AppError::UpstreamRateLimited => (

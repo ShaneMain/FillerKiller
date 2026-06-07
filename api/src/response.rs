@@ -8,6 +8,18 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
 
+// Deliberate shared-cache TTLs (seconds), tuned for edge-hit rate vs freshness
+//. Catalog data is near-immutable, so it caches for a long time;
+// vote-derived aggregates move as people vote, so they cache briefly and lean on
+// stale-while-revalidate to stay cheap. Bump these to scale read traffic.
+
+/// Show detail / seasons — catalog data, changes rarely.
+pub const TTL_CATALOG: u32 = 3600;
+/// Search proxy — TMDB results change slowly; spares the upstream.
+pub const TTL_SEARCH: u32 = 600;
+/// Episode lists and skip guides — derived from live votes.
+pub const TTL_AGGREGATE: u32 = 30;
+
 /// JSON response with a shared-cache `Cache-Control` for catalog data.
 /// `s_maxage` is the CDN/edge TTL in seconds.
 pub fn cacheable_json<T: Serialize>(value: &T, s_maxage: u32) -> Response {

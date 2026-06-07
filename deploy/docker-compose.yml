@@ -34,6 +34,10 @@ services:
       TMDB_IMAGE_BASE_URL: ${TMDB_IMAGE_BASE_URL:-https://image.tmdb.org/t/p}
       CORS_ALLOWED_ORIGIN: https://${DOMAIN}
       BIND_ADDR: 0.0.0.0:8080
+      # Single-instance box: applying migrations on boot is safe and keeps the
+      # deploy one command. Ephemeral/multi-instance (Cloud Run) leaves this unset
+      # and runs the `migrate` subcommand as a deploy step instead.
+      RUN_MIGRATIONS_ON_BOOT: "true"
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?set AUTH_JWT_SECRET in .env}
       AUTH_BASE_URL: https://${DOMAIN}
       WEB_POST_LOGIN_URL: https://${DOMAIN}

@@ -76,7 +76,7 @@ pub fn status(filler: i64, worth_watching: i64, canon: i64) -> EpisodeStatus {
         (EpisodeStatus::WorthWatching, worth_watching),
         (EpisodeStatus::Canon, canon),
     ];
-    ranked.sort_by(|a, b| b.1.cmp(&a.1));
+    ranked.sort_by_key(|entry| std::cmp::Reverse(entry.1));
 
     let lead = (ranked[0].1 - ranked[1].1) as f64 / total as f64;
     if lead <= CONTESTED_MARGIN {

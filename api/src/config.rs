@@ -16,6 +16,13 @@ pub struct Config {
     pub cors_allowed_origin: String,
     /// Address to bind, e.g. "0.0.0.0:8080".
     pub bind_addr: String,
+    /// Apply migrations on boot. Off by default: under ephemeral / multi-instance
+    /// compute every cold start would race to migrate, so migrations run as an
+    /// explicit `migrate` deploy step instead. A single-instance box
+    /// can opt back in with RUN_MIGRATIONS_ON_BOOT=true for one-command deploys.
+    pub run_migrations_on_boot: bool,
+    /// Max vote writes per client IP per minute.
+    pub vote_rate_per_minute: u32,
     /// Auth settings (OAuth + JWT). See the design notes.
     pub auth: AuthConfig,
 }
@@ -58,7 +65,11 @@ impl Config {
                 "https://image.tmdb.org/t/p",
             ),
             cors_allowed_origin: optional("CORS_ALLOWED_ORIGIN", "http://localhost:5173"),
-            bind_addr: optional("BIND_ADDR", "0.0.0.0:8080"),
+            bind_addr: bind_addr_from_env(),
+            run_migrations_on_boot: optional("RUN_MIGRATIONS_ON_BOOT", "false") == "true",
+            vote_rate_per_minute: optional("VOTE_RATE_PER_MINUTE", "30")
+                .parse()
+                .unwrap_or(30),
             auth: AuthConfig {
                 jwt_secret,
                 base_url: optional("AUTH_BASE_URL", "http://localhost:8080"),
@@ -91,6 +102,16 @@ fn load_providers() -> Vec<ProviderConfig> {
         tracing::warn!("no OAuth providers configured; sign-in is disabled");
     }
     providers
+}
+
+/// Resolve the bind address. Cloud Run (and most serverless container hosts)
+/// inject the port to listen on via `$PORT`; honour it when present, otherwise
+/// fall back to `BIND_ADDR` (default `0.0.0.0:8080`).
+fn bind_addr_from_env() -> String {
+    match std::env::var("PORT") {
+        Ok(port) if !port.trim().is_empty() => format!("0.0.0.0:{}", port.trim()),
+        _ => optional("BIND_ADDR", "0.0.0.0:8080"),
+    }
 }
 
 fn required(key: &str) -> anyhow::Result<String> {
