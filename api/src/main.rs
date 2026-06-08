@@ -19,8 +19,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{Path, Query, Request, State};
+use axum::http::{HeaderValue, StatusCode};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{any, get, post, put};
 use axum::{Json, Router};
@@ -165,6 +166,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let app = app
+        .layer(axum::middleware::from_fn(security_headers))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -225,6 +227,34 @@ fn build_cors(origin: &str) -> CorsLayer {
             CorsLayer::new()
         }
     }
+}
+
+/// Baseline security response headers on every response. The app is served
+/// directly by Cloud Run (no edge proxy in front), so these must originate here.
+/// CSP allows the SPA's own assets + inline styles (the vote-ratio bars use
+/// inline `width`) and TMDB images; everything else is same-origin.
+async fn security_headers(req: Request, next: Next) -> Response {
+    let mut res = next.run(req).await;
+    let h = res.headers_mut();
+    h.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
+    h.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    h.insert(
+        "referrer-policy",
+        HeaderValue::from_static("strict-origin-when-cross-origin"),
+    );
+    h.insert(
+        "strict-transport-security",
+        HeaderValue::from_static("max-age=63072000; includeSubDomains"),
+    );
+    h.insert(
+        "content-security-policy",
+        HeaderValue::from_static(
+            "default-src 'self'; img-src 'self' https://image.tmdb.org data:; \
+             style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; \
+             frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+        ),
+    );
+    res
 }
 
 async fn root() -> impl IntoResponse {
