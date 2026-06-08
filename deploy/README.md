@@ -105,6 +105,17 @@ internet ──▶ Cloudflare (TLS, CDN cache, rate rules)
 - A **Neon** project. Copy its **pooled** connection string (host has `-pooler`):
   `postgresql://USER:PASS@ep-xxx-pooler.REGION.aws.neon.tech/neondb?sslmode=require`.
 - TMDB read token; Google/GitHub OAuth apps; a domain on Cloudflare.
+- Two service accounts (set up already): a **runtime** SA the service runs as
+  (granted `secretAccessor` on the secrets only) and a **build** SA Cloud Build
+  uses (build/push/deploy roles only). The default compute SA has **no roles**,
+  so `--source` deploys/jobs **must** pass `--build-service-account`. Set these
+  for the commands below, and run them **from the repo root** (the root
+  `Dockerfile` builds the SPA + API into one image — not `api/`):
+
+```bash
+RUNTIME_SA=fillerkiller-api@$PROJECT.iam.gserviceaccount.com
+BUILD_SA=projects/$PROJECT/serviceAccounts/fillerkiller-build@$PROJECT.iam.gserviceaccount.com
+```
 
 ### 1. Migrate FIRST (required — do not skip)
 
@@ -113,10 +124,10 @@ on data routes while `/health` still looks green, so run this **before** sending
 and **after every deploy that adds a migration**:
 
 ```bash
-cd api
-# One-off Cloud Run Job that runs the `migrate` subcommand, then exits.
+# From the repo root. One-off Cloud Run Job that runs the `migrate` subcommand.
 gcloud run jobs deploy fillerkiller-migrate \
   --source . --region $REGION \
+  --build-service-account=$BUILD_SA \
   --command fillerkiller-api --args migrate \
   --set-secrets DATABASE_URL=fk-database-url:latest \
   --set-env-vars TMDB_API_READ_TOKEN=unused,AUTH_JWT_SECRET=$(openssl rand -base64 32)
@@ -129,9 +140,10 @@ gcloud run jobs execute fillerkiller-migrate --region $REGION --wait
 ### 2. Deploy the API
 
 ```bash
-cd api
+# From the repo root (root Dockerfile builds SPA + API into one image).
 gcloud run deploy fillerkiller-api \
   --source . --region $REGION --allow-unauthenticated \
+  --service-account=$RUNTIME_SA --build-service-account=$BUILD_SA \
   --set-secrets DATABASE_URL=fk-database-url:latest,AUTH_JWT_SECRET=fk-jwt:latest,\
 TMDB_API_READ_TOKEN=fk-tmdb:latest,GOOGLE_CLIENT_SECRET=fk-google:latest,\
 GITHUB_CLIENT_SECRET=fk-github:latest \
@@ -167,6 +179,7 @@ Notes:
 # safety net). Schedule via Cloud Scheduler if desired.
 gcloud run jobs deploy fillerkiller-recompute \
   --source . --region $REGION \
+  --build-service-account=$BUILD_SA \
   --command fillerkiller-api --args recompute-scores \
   --set-secrets DATABASE_URL=fk-database-url:latest \
   --set-env-vars TMDB_API_READ_TOKEN=unused,AUTH_JWT_SECRET=$(openssl rand -base64 32)
@@ -181,7 +194,8 @@ gcloud run jobs deploy fillerkiller-recompute \
 
 ```bash
 git pull
-# If the change added a migration, run step 1 (migrate job) first, then:
-cd api && gcloud run deploy fillerkiller-api --source . --region $REGION   # API
-cd ../web && npm run build && <redeploy web/dist to Cloudflare Pages>      # SPA
+# If the change added a migration, run step 1 (migrate job) first. Then redeploy
+# from the repo root — the root Dockerfile rebuilds the SPA + API into one image:
+gcloud run deploy fillerkiller-api --source . --region $REGION \
+  --service-account=$RUNTIME_SA --build-service-account=$BUILD_SA
 ```
