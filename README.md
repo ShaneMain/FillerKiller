@@ -1,12 +1,18 @@
 # FillerKiller
 
+[![CI](https://github.com/ShaneMain/FillerKiller/actions/workflows/ci.yml/badge.svg)](https://github.com/ShaneMain/FillerKiller/actions/workflows/ci.yml)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-Axum-000000?logo=rust&logoColor=white)](api/)
+[![React](https://img.shields.io/badge/React-Vite-20232a?logo=react&logoColor=61dafb)](web/)
+[![Live](https://img.shields.io/badge/live-fillerkiller.app-2ea44f)](https://fillerkiller.app)
+
 **Crowd-sourced _filler vs. canon_ voting for TV episodes.** Browse a show, vote on
 whether each episode is essential canon, fun-but-skippable, or pure filler, and get a
 **skip guide** — the canon-only watch order for any series.
 
 🔗 **Live at [fillerkiller.app](https://fillerkiller.app)**
 
-![FillerKiller front page](docs/front-page.png)
+![FillerKiller — voting on Star Trek: The Next Generation episodes](docs/show-page.png)
 
 ## What it does
 
