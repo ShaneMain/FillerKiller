@@ -39,7 +39,7 @@ use crate::auth::{CurrentUser, OptionalUser};
 use crate::config::{AuthConfig, Config};
 use crate::error::AppError;
 use crate::models::{AggregateView, SearchItem, SearchResponse, ShowDetail, VoteResponse};
-use crate::rate_limit::IpRateLimiter;
+use crate::rate_limit::{IpRateLimiter, UserRateLimiter};
 use crate::response::{cacheable_json, private_json, TTL_AGGREGATE, TTL_CATALOG, TTL_SEARCH};
 use crate::scoring::{build_skip_guide, ContestedHandling, ScoredEpisode, VoteValue};
 use crate::tmdb::TmdbClient;
@@ -53,8 +53,10 @@ pub struct AppState {
     /// Shared HTTP client for outbound calls (OAuth token/userinfo).
     pub http: reqwest::Client,
     pub auth: Arc<AuthConfig>,
-    /// Per-IP vote rate limiter (in-memory, per-instance). See `rate_limit`.
+    /// Per-IP vote rate limiter (in-memory, per-instance, best-effort).
     pub rate_limiter: Arc<IpRateLimiter>,
+    /// Per-user vote rate limiter, keyed on the verified JWT user id (unspoofable).
+    pub user_rate_limiter: Arc<UserRateLimiter>,
 }
 
 #[tokio::main]
@@ -107,17 +109,20 @@ async fn main() -> anyhow::Result<()> {
         http,
         auth: Arc::new(config.auth.clone()),
         rate_limiter: rate_limit::ip_limiter(config.vote_rate_per_minute),
+        user_rate_limiter: rate_limit::user_limiter(config.vote_rate_per_minute),
     };
 
     // Evict idle per-IP buckets periodically so the keyed limiter doesn't grow
     // unbounded on a long-lived instance (a no-op on short-lived serverless ones).
     {
-        let limiter = state.rate_limiter.clone();
+        let ip = state.rate_limiter.clone();
+        let user = state.user_rate_limiter.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(300));
             loop {
                 tick.tick().await;
-                limiter.retain_recent();
+                ip.retain_recent();
+                user.retain_recent();
             }
         });
     }
@@ -453,6 +458,7 @@ async fn put_vote(
     // (400) instead of Axum's default plain-text 422.
     body: Result<Json<VoteBody>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Response, AppError> {
+    rate_limit::check_user(&state.user_rate_limiter, user.id)?;
     let Json(body) = body.map_err(|e| AppError::BadRequest(e.body_text()))?;
     let episode_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest(format!("invalid episode id: {id:?}")))?;
@@ -471,6 +477,7 @@ async fn delete_vote(
     Path(id): Path<String>,
     user: CurrentUser,
 ) -> Result<Response, AppError> {
+    rate_limit::check_user(&state.user_rate_limiter, user.id)?;
     let episode_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest(format!("invalid episode id: {id:?}")))?;
     if !db::episode_exists(&state.pool, episode_id).await? {

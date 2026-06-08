@@ -17,6 +17,7 @@ use axum::http::HeaderMap;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use governor::{clock::DefaultClock, state::keyed::DefaultKeyedStateStore, Quota, RateLimiter};
+use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::AppState;
@@ -28,6 +29,26 @@ pub type IpRateLimiter = RateLimiter<IpAddr, DefaultKeyedStateStore<IpAddr>, Def
 pub fn ip_limiter(per_minute: u32) -> Arc<IpRateLimiter> {
     let quota = Quota::per_minute(NonZeroU32::new(per_minute.max(1)).expect("non-zero"));
     Arc::new(RateLimiter::keyed(quota))
+}
+
+/// Keyed (per-user) limiter for authenticated vote writes. The user id comes
+/// from the verified JWT, so — unlike the IP layer above — it can't be spoofed by
+/// forging headers. This is the meaningful limit on the vote path; the IP layer
+/// is kept as best-effort defense in depth.
+pub type UserRateLimiter = RateLimiter<Uuid, DefaultKeyedStateStore<Uuid>, DefaultClock>;
+
+/// Build a per-user limiter allowing `per_minute` vote writes per user.
+pub fn user_limiter(per_minute: u32) -> Arc<UserRateLimiter> {
+    let quota = Quota::per_minute(NonZeroU32::new(per_minute.max(1)).expect("non-zero"));
+    Arc::new(RateLimiter::keyed(quota))
+}
+
+/// Enforce the per-user vote quota; returns `RateLimited` (429) when exceeded.
+pub fn check_user(limiter: &UserRateLimiter, user_id: Uuid) -> Result<(), AppError> {
+    limiter
+        .check_key(&user_id)
+        .map(|_| ())
+        .map_err(|_| AppError::RateLimited)
 }
 
 /// Axum middleware: reject vote writes from an IP over its quota with 429.

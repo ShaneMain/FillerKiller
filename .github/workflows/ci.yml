@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  api:
+    name: API (Rust)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    env:
+      SQLX_OFFLINE: "true" # build against the committed .sqlx cache; no DB needed
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: api
+      - run: cargo build --locked
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      # RUSTSEC-2023-0071 (rsa "Marvin attack"): pulled in transitively via sqlx's
+      # MySQL driver (a macro-time dependency) — unreachable in our Postgres-only
+      # build, and no fixed upstream version exists. Drop this ignore once sqlx
+      # removes the dependency or a fix ships.
+      - run: cargo audit --ignore RUSTSEC-2023-0071
+
+  web:
+    name: Web (SPA)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run build
