@@ -1,7 +1,7 @@
 //! FillerKiller API — Rust + Axum.
 //!
-//! Catalog read path: search + show detail (import-on-demand) + episodes, per
-//! the design notes. Voting endpoints land next.
+//! Catalog read path: search + show detail (import-on-demand) + episodes.
+//! Voting endpoints land next.
 
 mod auth;
 mod config;
@@ -266,7 +266,6 @@ async fn root() -> impl IntoResponse {
     Json(json!({
         "service": "fillerkiller-api",
         "version": env!("CARGO_PKG_VERSION"),
-        "docs": "see internal docs",
     }))
 }
 
@@ -364,8 +363,8 @@ struct EpisodesParams {
 }
 
 /// `GET /api/shows/{id}/episodes?season=` — episodes with aggregate scores, and
-/// `myVote` when signed in. Anonymous responses are shared-cacheable briefly
-///; signed-in responses carry per-user data, so they are never cached.
+/// `myVote` when signed in. Anonymous responses are shared-cacheable briefly;
+/// signed-in responses carry per-user data, so they are never cached.
 async fn get_show_episodes(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -489,7 +488,7 @@ async fn delete_vote(
     Ok(private_json(&resp))
 }
 
-// ---- Auth -------------------------
+// ---- Auth (OAuth -> stateless JWT in an httpOnly cookie) --------------------
 
 /// `GET /api/auth/{provider}/login` — redirect to the provider with a CSRF state.
 async fn oauth_login(

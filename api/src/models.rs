@@ -1,5 +1,5 @@
-//! API response shapes for the catalog endpoints. camelCase wire format per
-//! the design notes. These are serialized to the SPA; they are not DB rows.
+//! API response shapes for the catalog endpoints. camelCase wire format.
+//! These are serialized to the SPA; they are not DB rows.
 
 use chrono::NaiveDate;
 use serde::Serialize;

@@ -1,7 +1,6 @@
--- FillerKiller initial schema. Mirrors the design notes.
+-- FillerKiller initial schema.
 -- Catalog (show/season/episode) is a TMDB cache; vote/episode_score is the
--- opinion layer we own. Keep in sync with the spec — changes there are spec
--- changes.
+-- opinion layer we own.
 
 CREATE TYPE vote_value AS ENUM ('FILLER', 'CANON');
 
@@ -58,8 +57,8 @@ CREATE TABLE vote (
 );
 CREATE INDEX vote_episode_idx ON vote (episode_id);
 
--- Cached aggregate per episode. In MVP this can be recomputed live; promote to
--- a maintained table when read volume warrants.
+-- Cached aggregate per episode. Can be recomputed live; promote to a maintained
+-- table when read volume warrants.
 CREATE TABLE episode_score (
     episode_id   UUID PRIMARY KEY REFERENCES episode (id) ON DELETE CASCADE,
     filler_votes INTEGER NOT NULL DEFAULT 0,

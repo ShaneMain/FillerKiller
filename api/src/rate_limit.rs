@@ -1,7 +1,8 @@
 //! Per-IP rate limiting for mutating endpoints (vote writes).
 //!
 //! This is application-level *defense in depth*, not the primary control. The
-//! authoritative, global per-IP limiter belongs at the CDN edge: it sees every request before our compute and
+//! authoritative, global per-IP limiter belongs at the CDN edge (Cloudflare
+//! rate-limiting rules): it sees every request before our compute and
 //! shares state across instances. This in-process limiter is per-instance — each
 //! ephemeral instance keeps its own buckets — so under scale-out it bounds abuse
 //! per instance, not globally. Ballot integrity does not depend on it either: the

@@ -1,6 +1,6 @@
 // Client for the FillerKiller API. Calls are same-origin (relative `/api/...`):
 // in prod Caddy serves the SPA and API together; in dev the Vite proxy forwards
-// `/api` + `/health` to the backend. See internal docs
+// `/api` + `/health` to the backend.
 
 export type VoteValue = "FILLER" | "WORTH_WATCHING" | "CANON";
 export type EpisodeStatus =

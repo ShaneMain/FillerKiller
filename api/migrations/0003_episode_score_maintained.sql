@@ -1,6 +1,6 @@
 -- Maintain `episode_score` as a denormalized per-episode vote tally so the read
 -- path is a single indexed lookup instead of aggregating the whole `vote` table
--- on every request.
+-- on every request (scaling reads with traffic).
 --
 -- This table stores RAW COUNTS only. The displayed status and the canonical
 -- filler_score are still derived in code (scoring.rs) from these counts — that

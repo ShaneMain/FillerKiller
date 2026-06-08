@@ -1,6 +1,6 @@
 //! TMDB import-on-demand. The first time a show is opened we fetch the series,
-//! its seasons, and their episodes from TMDB and upsert them. See the design notes and
-//! the design notes. TMDB is the catalog source of truth; we only cache it.
+//! its seasons, and their episodes from TMDB and upsert them. TMDB is the
+//! catalog source of truth; we only cache it.
 
 use chrono::NaiveDate;
 use uuid::Uuid;
@@ -30,7 +30,8 @@ pub async fn resolve_show_id(state: &AppState, id_param: &str) -> Result<Uuid, A
 }
 
 /// Ensure a TMDB show (and its seasons + episodes) is imported. Returns our id.
-/// If already imported, returns the existing id without re-fetching.
+/// If already imported, returns the existing id without re-fetching (refresh on
+/// a TTL is handled separately).
 ///
 /// All TMDB fetches happen first; only then do we write, atomically, in one
 /// transaction. So a network failure mid-import leaves no partial state (which

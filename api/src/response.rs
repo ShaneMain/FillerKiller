@@ -1,6 +1,6 @@
 //! Response helpers. Catalog reads are cacheable and shared across all users,
 //! so we set `Cache-Control` to let a CDN/edge cache absorb most reads — the
-//! dominant cost lever per the design notes.
+//! dominant cost lever.
 
 use axum::http::header::CACHE_CONTROL;
 use axum::http::HeaderValue;
@@ -8,8 +8,8 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
 
-// Deliberate shared-cache TTLs (seconds), tuned for edge-hit rate vs freshness
-//. Catalog data is near-immutable, so it caches for a long time;
+// Deliberate shared-cache TTLs (seconds), tuned for edge-hit rate vs freshness.
+// Catalog data is near-immutable, so it caches for a long time;
 // vote-derived aggregates move as people vote, so they cache briefly and lean on
 // stale-while-revalidate to stay cheap. Bump these to scale read traffic.
 

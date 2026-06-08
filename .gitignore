@@ -14,5 +14,8 @@
 # Playwright MCP test artifacts
 .playwright-mcp/
 
-# Ad-hoc review screenshots dropped in the repo root
+# Ad-hoc review screenshots dropped in the repo root (docs/ screenshots are tracked)
 /*.png
+
+# Local scratch / operational handoff notes (never publish — may hold infra IDs)
+deploy/DOMAIN-CUTOVER-HANDOFF.md

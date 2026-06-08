@@ -3,7 +3,7 @@ name = "fillerkiller-api"
 version = "0.1.0"
 edition = "2021"
 description = "FillerKiller API — Rust + Axum service for filler/canon episode voting"
-license = "MIT"
+license = "GPL-3.0-or-later"
 
 [dependencies]
 axum = "0.8"

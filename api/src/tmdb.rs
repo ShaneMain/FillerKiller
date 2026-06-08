@@ -1,4 +1,4 @@
-//! Server-side TMDB client. See the design notes.
+//! Server-side TMDB client.
 //!
 //! The TMDB token lives only here, in the API process. The React SPA never
 //! holds it — all catalog access is proxied through our endpoints.

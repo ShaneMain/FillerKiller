@@ -1,10 +1,10 @@
-# Root multi-stage build for Cloud Run: builds the SPA and the Rust
-# API and ships ONE image that serves both same-origin — API on /api + /health,
-# static SPA on everything else (so the SameSite=Lax cookie just works).
-# Deploy with: gcloud run deploy --source .
+# Root multi-stage build for single-service hosts (e.g. Cloud Run): builds the SPA
+# and the Rust API and ships ONE image that serves both same-origin — API on
+# /api + /health, static SPA on everything else (so the SameSite=Lax cookie just
+# works). Deploy with: gcloud run deploy --source .
 #
-# The single-box deploy uses api/Dockerfile + Caddy instead; this file
-# is only for the single-service Cloud Run deploy.
+# The single-box deploy uses api/Dockerfile + Caddy instead; this file is only for
+# the single-service container deploy.
 
 # --- Stage 1: build the SPA --------------------------------------------------
 FROM node:22-slim AS web

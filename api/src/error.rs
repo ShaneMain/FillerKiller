@@ -1,4 +1,4 @@
-//! API error type. Renders the JSON error shape from the design notes:
+//! API error type. Renders the JSON error shape used by every endpoint:
 //! `{ "error": { "code": string, "message": string } }`.
 
 use axum::http::StatusCode;

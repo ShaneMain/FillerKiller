@@ -1,6 +1,6 @@
 # Multi-stage build for the FillerKiller API. Produces a small image suitable for
-# a self-hosted box / containers. Builds offline using the committed
-# .sqlx query cache, so no database is needed at image-build time.
+# a self-hosted box / containers. Builds offline using the committed .sqlx query
+# cache, so no database is needed at image-build time.
 #
 # Note: this compiles dependencies on each image build. If build speed becomes a
 # concern, introduce cargo-chef for a cached dependency layer (the hand-rolled

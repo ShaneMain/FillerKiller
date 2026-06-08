@@ -1,8 +1,8 @@
 //! Filler scoring and skip-guide derivation.
 //!
-//! Single source of truth in code for the math in the design notes
-//!. The constants MUST match that document — changing them
-//! is a spec change. Pure functions only: no I/O, no DB.
+//! Single source of truth in code for the filler-scoring math. These constants
+//! define the public voting behavior — change them deliberately. Pure functions
+//! only: no I/O, no DB.
 
 use serde::{Deserialize, Serialize};
 

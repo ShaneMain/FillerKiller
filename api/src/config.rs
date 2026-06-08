@@ -1,12 +1,11 @@
-//! Runtime configuration, loaded from the environment. See api/.env.example
-//! and the design notes.
+//! Runtime configuration, loaded from the environment. See api/.env.example.
 
 use crate::oauth::{ProviderConfig, ProviderKind};
 
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Postgres connection string. Use the POOLED string for serverless
-    /// Postgres (Neon/Supabase) — see the design notes.
+    /// Postgres (Neon/Supabase).
     pub database_url: String,
     /// TMDB v4 read token (server-side only; never sent to the client).
     pub tmdb_token: String,
@@ -18,16 +17,17 @@ pub struct Config {
     pub bind_addr: String,
     /// Apply migrations on boot. Off by default: under ephemeral / multi-instance
     /// compute every cold start would race to migrate, so migrations run as an
-    /// explicit `migrate` deploy step instead. A single-instance box
-    /// can opt back in with RUN_MIGRATIONS_ON_BOOT=true for one-command deploys.
+    /// explicit `migrate` deploy step instead. A single-instance box can opt
+    /// back in with RUN_MIGRATIONS_ON_BOOT=true for one-command deploys.
     pub run_migrations_on_boot: bool,
-    /// Max vote writes per client IP per minute.
+    /// Max vote writes per client IP per minute (app-level defense-in-depth; the
+    /// authoritative limiter is the CDN edge).
     pub vote_rate_per_minute: u32,
     /// Directory of the built SPA to serve as a fallback (same-origin SPA+API on
     /// one service, e.g. Cloud Run). Unset → don't serve static files (the box
     /// deploy serves the SPA via Caddy instead).
     pub static_dir: Option<String>,
-    /// Auth settings (OAuth + JWT). See the design notes.
+    /// Auth settings (OAuth + JWT).
     pub auth: AuthConfig,
 }
 

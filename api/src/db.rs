@@ -151,7 +151,7 @@ pub async fn upsert_episode(
     Ok(())
 }
 
-/// Find or create a user by email. Updates
+/// Find or create a user by email (the OAuth identity key). Updates
 /// the display name on subsequent logins. Returns our user id.
 pub async fn upsert_user_by_email(
     pool: &PgPool,
@@ -209,7 +209,7 @@ pub async fn seasons_with_counts(
 ///
 /// Reads the maintained `episode_score` tally (one indexed row per episode,
 /// kept current by triggers) rather than aggregating the `vote` table on every
-/// request — the read-path scaling lever in the design notes. A missing score row
+/// request — the read-path scaling lever. A missing score row
 /// (episode with no votes yet) COALESCEs to zero. `myVote` is per-user and
 /// can't be precomputed, so it stays a single correlated lookup.
 pub async fn episodes_with_scores(

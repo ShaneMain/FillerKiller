@@ -1,4 +1,4 @@
-//! OAuth 2.0 Authorization Code flow for Google and GitHub. See the design notes.
+//! OAuth 2.0 Authorization Code flow for Google and GitHub.
 //!
 //! We hand-roll the two HTTP steps (token exchange + userinfo) rather than pull
 //! a provider framework: it's a couple of requests and the per-provider userinfo

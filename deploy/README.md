@@ -82,8 +82,8 @@ gunzip -c fillerkiller-YYYYMMDD.sql.gz | \
 - Local smoke test without a real domain: set `DOMAIN=localhost` — Caddy serves an
   internal cert, so it's still HTTPS and the `Secure` cookie works unchanged (no need
   to touch `AUTH_COOKIE_SECURE`).
-- Scaling beyond one box (resize → split API/DB → read replicas) is in the design notes; none
-  of it changes application code.
+- Scaling beyond one box (resize → split API/DB → read replicas) changes none of the
+  application code.
 
 ---
 
@@ -119,7 +119,8 @@ BUILD_SA=projects/$PROJECT/serviceAccounts/fillerkiller-build@$PROJECT.iam.gserv
 
 ### 1. Migrate FIRST (required — do not skip)
 
-Migrations are an explicit step, never run on boot under Cloud Run. A fresh service against an un-migrated DB returns `500`s
+Migrations are an explicit step, never run on boot under Cloud Run (concurrent cold
+starts would race). A fresh service against an un-migrated DB returns `500`s
 on data routes while `/health` still looks green, so run this **before** sending traffic
 and **after every deploy that adds a migration**:
 
