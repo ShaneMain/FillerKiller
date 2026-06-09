@@ -12,7 +12,8 @@ WORKDIR /app
 # Use the committed sqlx offline cache instead of a live DB at build time.
 ENV SQLX_OFFLINE=true
 COPY . .
-RUN cargo build --release
+# --locked: build the exact dependency versions pinned in Cargo.lock (matches CI).
+RUN cargo build --release --locked
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \

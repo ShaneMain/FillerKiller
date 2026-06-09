@@ -65,6 +65,13 @@ pub struct OAuthUser {
     pub name: Option<String>,
 }
 
+/// Log the real upstream cause and return a generic error that leaks no upstream
+/// status/body/parse detail to the client.
+fn upstream_err(context: &str, detail: impl std::fmt::Display) -> AppError {
+    tracing::warn!("oauth {context}: {detail}");
+    AppError::Upstream("sign-in is temporarily unavailable; try again".into())
+}
+
 impl ProviderConfig {
     /// Build the provider authorize URL to redirect the browser to.
     pub fn authorize_url(&self, redirect_uri: &str, state: &str) -> String {
@@ -99,17 +106,14 @@ impl ProviderConfig {
             .form(&params)
             .send()
             .await
-            .map_err(|e| AppError::Upstream(format!("token exchange failed: {e}")))?;
+            .map_err(|e| upstream_err("token exchange transport", e))?;
         if !res.status().is_success() {
-            return Err(AppError::Upstream(format!(
-                "token exchange returned {}",
-                res.status()
-            )));
+            return Err(upstream_err("token exchange status", res.status()));
         }
         let body: TokenResponse = res
             .json()
             .await
-            .map_err(|e| AppError::Upstream(format!("bad token response: {e}")))?;
+            .map_err(|e| upstream_err("token response decode", e))?;
         Ok(body.access_token)
     }
 
@@ -135,17 +139,17 @@ impl ProviderConfig {
             .bearer_auth(access_token)
             .send()
             .await
-            .map_err(|e| AppError::Upstream(format!("userinfo failed: {e}")))?
+            .map_err(|e| upstream_err("google userinfo transport", e))?
             .json()
             .await
-            .map_err(|e| AppError::Upstream(format!("bad userinfo: {e}")))?;
+            .map_err(|e| upstream_err("google userinfo decode", e))?;
         match info.email {
             Some(email) if info.email_verified.unwrap_or(false) => Ok(OAuthUser {
                 email,
                 name: info.name,
             }),
             _ => Err(AppError::Upstream(
-                "Google account has no verified email".into(),
+                "your Google account has no verified email".into(),
             )),
         }
     }
@@ -162,10 +166,10 @@ impl ProviderConfig {
             .header("User-Agent", "FillerKiller")
             .send()
             .await
-            .map_err(|e| AppError::Upstream(format!("github user failed: {e}")))?
+            .map_err(|e| upstream_err("github user transport", e))?
             .json()
             .await
-            .map_err(|e| AppError::Upstream(format!("bad github user: {e}")))?;
+            .map_err(|e| upstream_err("github user decode", e))?;
 
         let emails: Vec<GithubEmail> = http
             .get("https://api.github.com/user/emails")
@@ -173,16 +177,16 @@ impl ProviderConfig {
             .header("User-Agent", "FillerKiller")
             .send()
             .await
-            .map_err(|e| AppError::Upstream(format!("github emails failed: {e}")))?
+            .map_err(|e| upstream_err("github emails transport", e))?
             .json()
             .await
-            .map_err(|e| AppError::Upstream(format!("bad github emails: {e}")))?;
+            .map_err(|e| upstream_err("github emails decode", e))?;
 
         let email = emails
             .into_iter()
             .find(|e| e.primary && e.verified)
             .map(|e| e.email)
-            .ok_or_else(|| AppError::Upstream("no primary verified GitHub email".into()))?;
+            .ok_or_else(|| AppError::Upstream("your GitHub account has no verified email".into()))?;
 
         Ok(OAuthUser {
             email,

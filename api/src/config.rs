@@ -23,6 +23,9 @@ pub struct Config {
     /// Max vote writes per client IP per minute (app-level defense-in-depth; the
     /// authoritative limiter is the CDN edge).
     pub vote_rate_per_minute: u32,
+    /// Max TMDB import-on-demand fan-outs per instance per minute (caps outbound
+    /// load from the unauthenticated import path).
+    pub import_rate_per_minute: u32,
     /// Directory of the built SPA to serve as a fallback (same-origin SPA+API on
     /// one service, e.g. Cloud Run). Unset → don't serve static files (the box
     /// deploy serves the SPA via Caddy instead).
@@ -74,13 +77,19 @@ impl Config {
             vote_rate_per_minute: optional("VOTE_RATE_PER_MINUTE", "30")
                 .parse()
                 .unwrap_or(30),
+            import_rate_per_minute: optional("IMPORT_RATE_PER_MINUTE", "20")
+                .parse()
+                .unwrap_or(20),
             static_dir: std::env::var("STATIC_DIR").ok().filter(|s| !s.trim().is_empty()),
-            auth: AuthConfig {
-                jwt_secret,
-                base_url: optional("AUTH_BASE_URL", "http://localhost:8080"),
-                web_post_login_url: optional("WEB_POST_LOGIN_URL", "http://localhost:5173"),
-                cookie_secure: optional("AUTH_COOKIE_SECURE", "false") == "true",
-                providers: load_providers(),
+            auth: {
+                let base_url = optional("AUTH_BASE_URL", "http://localhost:8080");
+                AuthConfig {
+                    jwt_secret,
+                    cookie_secure: cookie_secure(&base_url),
+                    web_post_login_url: optional("WEB_POST_LOGIN_URL", "http://localhost:5173"),
+                    base_url,
+                    providers: load_providers(),
+                }
             },
         })
     }
@@ -116,6 +125,17 @@ fn bind_addr_from_env() -> String {
     match std::env::var("PORT") {
         Ok(port) if !port.trim().is_empty() => format!("0.0.0.0:{}", port.trim()),
         _ => optional("BIND_ADDR", "0.0.0.0:8080"),
+    }
+}
+
+/// Whether session cookies are marked `Secure`. Defaults to fail-closed: derived
+/// from the public base URL's scheme (`https://` → secure), so a prod deploy can't
+/// accidentally ship cookies over plain HTTP by omitting a flag. An explicit
+/// `AUTH_COOKIE_SECURE` overrides (e.g. to test HTTPS behaviour locally).
+fn cookie_secure(base_url: &str) -> bool {
+    match std::env::var("AUTH_COOKIE_SECURE") {
+        Ok(v) if !v.trim().is_empty() => v.trim() == "true",
+        _ => base_url.starts_with("https://"),
     }
 }
 

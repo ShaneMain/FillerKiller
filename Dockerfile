@@ -19,7 +19,8 @@ FROM rust:1-slim AS api
 WORKDIR /app
 ENV SQLX_OFFLINE=true
 COPY api/ ./
-RUN cargo build --release
+# --locked: build the exact dependency versions pinned in Cargo.lock (matches CI).
+RUN cargo build --release --locked
 
 # --- Stage 3: runtime --------------------------------------------------------
 FROM debian:bookworm-slim AS runtime

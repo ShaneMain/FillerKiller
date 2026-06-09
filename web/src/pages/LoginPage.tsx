@@ -1,8 +1,10 @@
 import { Link } from "react-router-dom";
 import { loginUrl } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import { usePageMeta } from "../lib/meta";
 
 export function LoginPage() {
+  usePageMeta("Sign in", "Sign in to FillerKiller to vote on episodes.");
   const { user } = useAuth();
 
   return (

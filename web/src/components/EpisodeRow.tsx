@@ -1,8 +1,10 @@
 import { useState } from "react";
-import { castVote, removeVote, type Episode, type EpisodeScore, type VoteValue } from "../lib/api";
+import { ApiError, castVote, removeVote, type Episode, type EpisodeScore, type VoteValue } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { StatusBadge } from "./StatusBadge";
 
 export function EpisodeRow({ episode, signedIn }: { episode: Episode; signedIn: boolean }) {
+  const { refresh } = useAuth();
   const [score, setScore] = useState<EpisodeScore>(episode.score);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -16,7 +18,17 @@ export function EpisodeRow({ episode, signedIn }: { episode: Episode; signedIn: 
       const res = score.myVote === value ? await removeVote(episode.id) : await castVote(episode.id, value);
       setScore({ ...res.score, myVote: res.myVote });
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "vote failed");
+      // An expired/cleared session (the 7-day JWT lapsed while the tab stayed
+      // open) returns 401. Re-sync auth so the UI reflects signed-out state and
+      // tell the user plainly, rather than echoing "authentication required".
+      if (e instanceof ApiError && e.status === 401) {
+        setErr("Your session expired — please sign in again.");
+        void refresh();
+      } else if (e instanceof ApiError && e.status === 429) {
+        setErr("You're voting too fast — give it a moment.");
+      } else {
+        setErr(e instanceof Error ? e.message : "vote failed");
+      }
     } finally {
       setBusy(false);
     }
@@ -69,11 +81,17 @@ export function EpisodeRow({ episode, signedIn }: { episode: Episode; signedIn: 
 function VoteBar({ filler, worth, canon }: { filler: number; worth: number; canon: number }) {
   const total = filler + worth + canon;
   if (total === 0) {
-    return <div className="mt-1.5 h-1.5 w-full rounded-full bg-zinc-800" />;
+    return <div className="mt-1.5 h-1.5 w-full rounded-full bg-zinc-800" aria-hidden="true" />;
   }
   const pct = (n: number) => `${(n / total) * 100}%`;
+  const label = `${filler} filler, ${worth} worth it, ${canon} canon`;
   return (
-    <div className="mt-1.5 flex h-1.5 w-full overflow-hidden rounded-full bg-zinc-800" title={`${filler} filler / ${worth} worth it / ${canon} canon`}>
+    <div
+      className="mt-1.5 flex h-1.5 w-full overflow-hidden rounded-full bg-zinc-800"
+      role="img"
+      aria-label={`Votes: ${label}`}
+      title={label}
+    >
       <div className="bg-rose-500" style={{ width: pct(filler) }} />
       <div className="bg-sky-500" style={{ width: pct(worth) }} />
       <div className="bg-emerald-500" style={{ width: pct(canon) }} />
@@ -98,6 +116,8 @@ function VoteButton({
     <button
       onClick={onClick}
       disabled={disabled}
+      aria-pressed={active}
+      aria-label={`Vote ${label}${active ? " (your current vote — click to remove)" : ""}`}
       title={disabled ? "Sign in to vote" : `Vote ${label}`}
       className={`whitespace-nowrap rounded-md px-3 py-2.5 text-sm font-medium ring-1 ring-inset ring-zinc-700 transition
         ${active ? activeCls : "text-zinc-300 hover:bg-zinc-800"}

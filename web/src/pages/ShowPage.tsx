@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
+  ApiError,
   getEpisodes,
   getShow,
   imageUrl,
@@ -8,6 +9,7 @@ import {
   type ShowDetail,
 } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import { usePageMeta } from "../lib/meta";
 import { EpisodeRow } from "../components/EpisodeRow";
 
 export function ShowPage() {
@@ -18,13 +20,17 @@ export function ShowPage() {
   const [season, setSeason] = useState<number | null>(null);
   const [episodes, setEpisodes] = useState<Episode[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [notFound, setNotFound] = useState(false);
   const [loadingEps, setLoadingEps] = useState(false);
+
+  usePageMeta(show?.name, show?.overview ?? undefined);
 
   // Load the show (imports on first open — can take a moment).
   useEffect(() => {
     let active = true;
     setShow(null);
     setErr(null);
+    setNotFound(false);
     getShow(id)
       .then((s) => {
         if (!active) return;
@@ -38,7 +44,14 @@ export function ShowPage() {
         const seasons = s.seasons.map((x) => x.seasonNumber);
         setSeason(seasons.includes(1) ? 1 : (seasons.find((n) => n > 0) ?? seasons[0] ?? null));
       })
-      .catch((e) => active && setErr(e instanceof Error ? e.message : "failed to load show"));
+      .catch((e) => {
+        if (!active) return;
+        if (e instanceof ApiError && e.status === 404) {
+          setNotFound(true);
+        } else {
+          setErr(e instanceof Error ? e.message : "failed to load show");
+        }
+      });
     return () => {
       active = false;
     };
@@ -58,6 +71,20 @@ export function ShowPage() {
       active = false;
     };
   }, [id, season, user?.id]);
+
+  if (notFound) {
+    return (
+      <div className="mx-auto max-w-3xl px-4 py-16 text-center">
+        <h1 className="text-2xl font-bold">Show not found</h1>
+        <p className="mt-2 text-zinc-400">
+          We couldn't find that show. It may have been removed, or the link is wrong.
+        </p>
+        <Link to="/" className="mt-5 inline-block font-medium text-rose-400 hover:text-rose-300">
+          ← Back to search
+        </Link>
+      </div>
+    );
+  }
 
   if (err) {
     return (

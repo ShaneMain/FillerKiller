@@ -39,7 +39,7 @@ use crate::auth::{CurrentUser, OptionalUser};
 use crate::config::{AuthConfig, Config};
 use crate::error::AppError;
 use crate::models::{AggregateView, SearchItem, SearchResponse, ShowDetail, VoteResponse};
-use crate::rate_limit::{IpRateLimiter, UserRateLimiter};
+use crate::rate_limit::{DirectRateLimiter, IpRateLimiter, UserRateLimiter};
 use crate::response::{cacheable_json, private_json, TTL_AGGREGATE, TTL_CATALOG, TTL_SEARCH};
 use crate::scoring::{build_skip_guide, ContestedHandling, ScoredEpisode, VoteValue};
 use crate::tmdb::TmdbClient;
@@ -57,6 +57,10 @@ pub struct AppState {
     pub rate_limiter: Arc<IpRateLimiter>,
     /// Per-user vote rate limiter, keyed on the verified JWT user id (unspoofable).
     pub user_rate_limiter: Arc<UserRateLimiter>,
+    /// Global (per-instance) limiter on TMDB import-on-demand. The import path is
+    /// unauthenticated and fans out several upstream calls, so bound how often a
+    /// fresh show can be imported to cap the outbound load any traffic can induce.
+    pub import_limiter: Arc<DirectRateLimiter>,
 }
 
 #[tokio::main]
@@ -95,7 +99,13 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("skipping boot migrations; run the `migrate` subcommand as a deploy step");
     }
 
-    let http = reqwest::Client::new();
+    // Bound outbound calls: a hung TMDB/OAuth endpoint must not hold a request
+    // (and, during an import, its DB transaction) open indefinitely and exhaust
+    // the pool. Both timeouts are generous relative to normal upstream latency.
+    let http = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(10))
+        .build()?;
     let tmdb = TmdbClient::new(
         http.clone(),
         config.tmdb_token.clone(),
@@ -110,6 +120,7 @@ async fn main() -> anyhow::Result<()> {
         auth: Arc::new(config.auth.clone()),
         rate_limiter: rate_limit::ip_limiter(config.vote_rate_per_minute),
         user_rate_limiter: rate_limit::user_limiter(config.vote_rate_per_minute),
+        import_limiter: rate_limit::direct_limiter(config.import_rate_per_minute),
     };
 
     // Evict idle per-IP buckets periodically so the keyed limiter doesn't grow
@@ -309,6 +320,11 @@ async fn search(
     let q = params.q.trim();
     if q.is_empty() {
         return Err(AppError::BadRequest("query parameter `q` is required".into()));
+    }
+    // Bound the query length — TMDB caps it anyway, and an unbounded `q` is just a
+    // pointlessly large outbound request.
+    if q.chars().count() > 200 {
+        return Err(AppError::BadRequest("query parameter `q` is too long".into()));
     }
 
     let found = state.tmdb.search_shows(q).await?;
@@ -568,11 +584,29 @@ async fn oauth_callback(
     }
 
     let redirect_uri = format!("{}/api/auth/{}/callback", state.auth.base_url, provider);
-    let access_token = p.exchange_code(&state.http, &code, &redirect_uri).await?;
-    let user = p.fetch_user(&state.http, &access_token).await?;
 
-    let user_id = db::upsert_user_by_email(&state.pool, &user.email, user.name.as_deref()).await?;
-    let token = auth::issue_jwt(&state.auth.jwt_secret, user_id, &user.email, user.name.as_deref())?;
+    // Exchange the code and mint a session. A failure here (upstream hiccup, a
+    // provider without a verified email) shouldn't dump a raw 502 JSON page on the
+    // user mid-login: log the real cause and bounce back to the SPA with the same
+    // generic failure flag the consent-denied path uses.
+    let session = async {
+        let access_token = p.exchange_code(&state.http, &code, &redirect_uri).await?;
+        let user = p.fetch_user(&state.http, &access_token).await?;
+        let user_id =
+            db::upsert_user_by_email(&state.pool, &user.email, user.name.as_deref()).await?;
+        auth::issue_jwt(&state.auth.jwt_secret, user_id, &user.email, user.name.as_deref())
+    }
+    .await;
+
+    let token = match session {
+        Ok(token) => token,
+        Err(e) => {
+            tracing::warn!("oauth callback failed for {provider}: {e:?}");
+            let jar = jar.remove(auth::STATE_COOKIE);
+            let url = format!("{}?auth_error=signin_failed", state.auth.web_post_login_url);
+            return Ok((jar, Redirect::to(&url)).into_response());
+        }
+    };
 
     let jar = jar
         .remove(auth::STATE_COOKIE)

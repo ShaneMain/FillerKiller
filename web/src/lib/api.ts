@@ -153,6 +153,15 @@ export function logout(): Promise<void> {
   return request(`/auth/logout`, { method: "POST" });
 }
 
+/**
+ * Permanently delete the current user's account and personal data. Their votes
+ * are retained anonymously (dissociated from the user) so community totals stay
+ * intact.
+ */
+export function deleteAccount(): Promise<void> {
+  return request(`/me`, { method: "DELETE" });
+}
+
 /** Full-page navigation target to start an OAuth login. */
 export function loginUrl(provider: "google" | "github"): string {
   return `/api/auth/${provider}/login`;

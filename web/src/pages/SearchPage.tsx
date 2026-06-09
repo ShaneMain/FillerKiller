@@ -1,12 +1,23 @@
 import { useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { imageUrl, searchShows, type SearchItem } from "../lib/api";
+import { usePageMeta } from "../lib/meta";
 
 export function SearchPage() {
+  usePageMeta();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchItem[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // The OAuth callback bounces failed sign-ins back here with ?auth_error.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const authError = searchParams.get("auth_error");
+  function dismissAuthError() {
+    const next = new URLSearchParams(searchParams);
+    next.delete("auth_error");
+    setSearchParams(next, { replace: true });
+  }
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -26,6 +37,14 @@ export function SearchPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8">
+      {authError && (
+        <div className="mb-6 flex items-start justify-between gap-3 rounded-md border border-rose-900/60 bg-rose-950/30 px-3 py-2 text-sm text-rose-300">
+          <span>Sign-in didn't complete. Please try again.</span>
+          <button onClick={dismissAuthError} aria-label="Dismiss" className="text-rose-400 hover:text-rose-200">
+            ✕
+          </button>
+        </div>
+      )}
       <section className="mb-8">
         <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
           Skip the <span className="text-rose-500">filler</span>.
@@ -96,7 +115,16 @@ export function SearchPage() {
                   )}
                   <div className="min-w-0">
                     <div className="truncate font-medium">{r.name}</div>
-                    <div className="text-sm text-zinc-500">{r.firstAirYear ?? "—"}</div>
+                    <div className="flex items-center gap-2 text-sm text-zinc-500">
+                      <span>{r.firstAirYear ?? "—"}</span>
+                      {r.fillerCoverage != null && (
+                        <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
+                          {r.fillerCoverage > 0
+                            ? `${Math.round(r.fillerCoverage * 100)}% rated`
+                            : "Not yet rated"}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </Link>
               </li>

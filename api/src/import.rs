@@ -48,6 +48,11 @@ pub async fn ensure_show_imported(state: &AppState, tmdb_id: i64) -> Result<Uuid
         return Ok(id);
     }
 
+    // Importing a not-yet-seen show fans out to TMDB (series + one call per
+    // season). This path is unauthenticated, so bound how often it can run per
+    // instance — already-imported shows short-circuit above and never hit this.
+    crate::rate_limit::check_import(&state.import_limiter)?;
+
     // 1. Fetch everything from TMDB up front.
     let detail = state.tmdb.get_show(tmdb_id).await?;
     let mut seasons = Vec::with_capacity(detail.seasons.len());

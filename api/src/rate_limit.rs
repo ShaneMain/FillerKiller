@@ -17,7 +17,11 @@ use axum::extract::{Request, State};
 use axum::http::HeaderMap;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use governor::{clock::DefaultClock, state::keyed::DefaultKeyedStateStore, Quota, RateLimiter};
+use governor::{
+    clock::DefaultClock,
+    state::{keyed::DefaultKeyedStateStore, InMemoryState, NotKeyed},
+    Quota, RateLimiter,
+};
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -50,6 +54,26 @@ pub fn check_user(limiter: &UserRateLimiter, user_id: Uuid) -> Result<(), AppErr
         .check_key(&user_id)
         .map(|_| ())
         .map_err(|_| AppError::RateLimited)
+}
+
+/// Unkeyed (global, per-instance) token-bucket limiter. Used to cap how often the
+/// unauthenticated import-on-demand path fans out to TMDB.
+pub type DirectRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
+
+/// Build a global limiter allowing `per_minute` events per instance.
+pub fn direct_limiter(per_minute: u32) -> Arc<DirectRateLimiter> {
+    let quota = Quota::per_minute(NonZeroU32::new(per_minute.max(1)).expect("non-zero"));
+    Arc::new(RateLimiter::direct(quota))
+}
+
+/// Enforce the global import quota; reports `UpstreamRateLimited` (503, "try again
+/// shortly") when exceeded — the caller is being throttled to protect TMDB, not
+/// for misbehaving.
+pub fn check_import(limiter: &DirectRateLimiter) -> Result<(), AppError> {
+    limiter
+        .check()
+        .map(|_| ())
+        .map_err(|_| AppError::UpstreamRateLimited)
 }
 
 /// Axum middleware: reject vote writes from an IP over its quota with 429.

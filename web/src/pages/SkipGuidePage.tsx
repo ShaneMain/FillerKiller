@@ -1,12 +1,17 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { getShow, getSkipGuide, type SkipGuide, type SkipGuideEntry } from "../lib/api";
+import { usePageMeta } from "../lib/meta";
 
 type Contested = "canon" | "filler";
 
 export function SkipGuidePage() {
   const { id = "" } = useParams();
   const [name, setName] = useState<string | null>(null);
+  usePageMeta(
+    name ? `Skip guide — ${name}` : "Skip guide",
+    name ? `Crowd-sourced binge-ready watch order for ${name}.` : undefined,
+  );
   const [guide, setGuide] = useState<SkipGuide | null>(null);
   const [contested, setContested] = useState<Contested>("canon");
   const [err, setErr] = useState<string | null>(null);

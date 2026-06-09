@@ -48,4 +48,8 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+      - run: npm run lint
       - run: npm run build
+      # Fail the build on known-vulnerable JS deps (high/critical only — low/moderate
+      # advisories in dev-only tooling shouldn't block).
+      - run: npm audit --omit=dev --audit-level=high

@@ -15,7 +15,9 @@ export function Header() {
             <span className="text-zinc-500">…</span>
           ) : user ? (
             <div className="flex items-center gap-3">
-              <span className="text-zinc-400">{user.displayName ?? user.email}</span>
+              <Link to="/account" className="text-zinc-400 hover:text-zinc-200">
+                {user.displayName ?? user.email}
+              </Link>
               <button
                 onClick={() => void signOut()}
                 className="rounded-md border border-zinc-700 px-2 py-1 text-zinc-300 hover:bg-zinc-800"
