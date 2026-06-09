@@ -12,6 +12,7 @@ export type EpisodeStatus =
 
 export interface SearchItem {
   showId: string | null;
+  slug: string | null;
   tmdbId: number;
   name: string;
   firstAirYear: number | null;
@@ -30,6 +31,7 @@ export interface ShowDetail {
   id: string;
   tmdbId: number;
   name: string;
+  slug: string;
   overview: string | null;
   posterPath: string | null;
   seasons: SeasonSummary[];

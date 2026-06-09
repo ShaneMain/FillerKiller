@@ -79,7 +79,9 @@ export function SearchPage() {
         <ul className="mt-6 space-y-2">
           {results.length === 0 && <li className="text-zinc-500">No matches.</li>}
           {results.map((r) => {
-            const to = `/shows/${encodeURIComponent(r.showId ?? `tmdb:${r.tmdbId}`)}`;
+            const to = r.slug
+              ? `/shows/${encodeURIComponent(r.slug)}`
+              : `/shows/tmdb:${r.tmdbId}`;
             const poster = imageUrl(r.posterPath, "w92");
             return (
               <li key={r.tmdbId}>

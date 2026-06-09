@@ -12,6 +12,8 @@ use crate::scoring::{EpisodeStatus, VoteValue};
 pub struct SearchItem {
     /// Our internal id, or null if the show hasn't been imported yet.
     pub show_id: Option<Uuid>,
+    /// URL slug, or null if the show hasn't been imported yet.
+    pub slug: Option<String>,
     pub tmdb_id: i64,
     pub name: String,
     pub first_air_year: Option<i32>,
@@ -41,6 +43,7 @@ pub struct ShowDetail {
     pub id: Uuid,
     pub tmdb_id: i64,
     pub name: String,
+    pub slug: String,
     pub overview: Option<String>,
     pub poster_path: Option<String>,
     pub seasons: Vec<SeasonSummary>,

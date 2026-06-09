@@ -11,22 +11,28 @@ use crate::AppState;
 
 /// Resolve a show path param to our internal id.
 ///
-/// `tmdb:<n>` triggers import-on-demand and returns the imported show's id.
-/// A bare UUID is looked up; missing → 404.
+/// Accepts, in order: `tmdb:<n>` (import-on-demand), a URL slug, or a bare UUID
+/// (kept for back-compat with older links). Unknown → 404.
 pub async fn resolve_show_id(state: &AppState, id_param: &str) -> Result<Uuid, AppError> {
     if let Some(rest) = id_param.strip_prefix("tmdb:") {
         let tmdb_id: i64 = rest
             .parse()
             .map_err(|_| AppError::BadRequest(format!("invalid tmdb id: {rest:?}")))?;
-        ensure_show_imported(state, tmdb_id).await
-    } else {
-        let id = Uuid::parse_str(id_param)
-            .map_err(|_| AppError::BadRequest(format!("invalid show id: {id_param:?}")))?;
-        match db::find_show_core(&state.pool, id).await? {
-            Some(_) => Ok(id),
-            None => Err(AppError::NotFound(format!("show {id} not found"))),
+        return ensure_show_imported(state, tmdb_id).await;
+    }
+
+    if let Some(id) = db::find_show_id_by_slug(&state.pool, id_param).await? {
+        return Ok(id);
+    }
+
+    // Legacy: a bare UUID still resolves so old links keep working.
+    if let Ok(id) = Uuid::parse_str(id_param) {
+        if db::find_show_core(&state.pool, id).await?.is_some() {
+            return Ok(id);
         }
     }
+
+    Err(AppError::NotFound(format!("show {id_param:?} not found")))
 }
 
 /// Ensure a TMDB show (and its seasons + episodes) is imported. Returns our id.
@@ -52,10 +58,12 @@ pub async fn ensure_show_imported(state: &AppState, tmdb_id: i64) -> Result<Uuid
 
     // 2. Write atomically — rolls back as a whole if anything fails.
     let mut tx = state.pool.begin().await?;
+    let slug = db::pick_unique_slug(&mut tx, &detail.name, detail.id).await?;
     let show_id = db::upsert_show(
         &mut *tx,
         detail.id,
         &detail.name,
+        &slug,
         detail.first_air_date.as_deref().and_then(parse_year),
         detail.poster_path.as_deref(),
         detail.overview.as_deref(),

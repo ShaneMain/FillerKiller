@@ -14,8 +14,75 @@ pub struct ShowCore {
     pub id: Uuid,
     pub tmdb_id: i64,
     pub name: String,
+    pub slug: String,
     pub overview: Option<String>,
     pub poster_path: Option<String>,
+}
+
+/// A show imported from TMDB, keyed by tmdb id in search results.
+pub struct ImportedShow {
+    pub tmdb_id: i64,
+    pub id: Uuid,
+    pub slug: String,
+}
+
+/// URL slug for a show name: lowercase, runs of non-alphanumerics collapsed to a
+/// single dash, dashes trimmed from the ends. Mirrors the SQL backfill in
+/// `0004_show_slug.sql`. May return "" (caller falls back to the tmdb id).
+pub fn slugify(name: &str) -> String {
+    let mut slug = String::with_capacity(name.len());
+    let mut pending_dash = false;
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if pending_dash && !slug.is_empty() {
+                slug.push('-');
+            }
+            pending_dash = false;
+            slug.push(ch.to_ascii_lowercase());
+        } else {
+            pending_dash = true;
+        }
+    }
+    slug
+}
+
+/// Pick a unique slug for a show: `slugify(name)` (or the tmdb id if that's
+/// empty), then — if already taken by a *different* show — `-<tmdb_id>`, then
+/// `-<tmdb_id>-N`, returning the first free one. Each candidate is checked
+/// against the actual `slug` column, so this stays correct even when a suffixed
+/// slug would collide with another show's bare slug (e.g. "Foo" #100 → "foo-100"
+/// vs a show literally named "Foo 100"). Mirrors the backfill in
+/// `0004_show_slug.sql`. Takes `&mut PgConnection` so it can probe in a loop.
+pub async fn pick_unique_slug(
+    conn: &mut sqlx::PgConnection,
+    name: &str,
+    tmdb_id: i64,
+) -> Result<String, sqlx::Error> {
+    let base = {
+        let s = slugify(name);
+        if s.is_empty() { tmdb_id.to_string() } else { s }
+    };
+    let mut candidate = base.clone();
+    let mut n = 0u32;
+    loop {
+        let taken = sqlx::query_scalar!(
+            "SELECT EXISTS(SELECT 1 FROM show WHERE slug = $1 AND tmdb_id <> $2)",
+            candidate,
+            tmdb_id
+        )
+        .fetch_one(&mut *conn)
+        .await?
+        .unwrap_or(false);
+        if !taken {
+            return Ok(candidate);
+        }
+        n += 1;
+        candidate = if n == 1 {
+            format!("{base}-{tmdb_id}")
+        } else {
+            format!("{base}-{tmdb_id}-{n}")
+        };
+    }
 }
 
 /// Our internal show id for a TMDB id, if the show has been imported.
@@ -26,24 +93,35 @@ pub async fn find_show_id_by_tmdb(pool: &PgPool, tmdb_id: i64) -> Result<Option<
     Ok(row)
 }
 
+/// Our internal show id for a URL slug, if any.
+pub async fn find_show_id_by_slug(pool: &PgPool, slug: &str) -> Result<Option<Uuid>, sqlx::Error> {
+    let row = sqlx::query_scalar!("SELECT id FROM show WHERE slug = $1", slug)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row)
+}
+
 /// Map a set of TMDB ids to the ones we already have imported.
 pub async fn imported_show_ids(
     pool: &PgPool,
     tmdb_ids: &[i64],
-) -> Result<Vec<(i64, Uuid)>, sqlx::Error> {
+) -> Result<Vec<ImportedShow>, sqlx::Error> {
     let rows = sqlx::query!(
-        "SELECT tmdb_id, id FROM show WHERE tmdb_id = ANY($1)",
+        "SELECT tmdb_id, id, slug FROM show WHERE tmdb_id = ANY($1)",
         tmdb_ids
     )
     .fetch_all(pool)
     .await?;
-    Ok(rows.into_iter().map(|r| (r.tmdb_id, r.id)).collect())
+    Ok(rows
+        .into_iter()
+        .map(|r| ImportedShow { tmdb_id: r.tmdb_id, id: r.id, slug: r.slug })
+        .collect())
 }
 
 pub async fn find_show_core(pool: &PgPool, id: Uuid) -> Result<Option<ShowCore>, sqlx::Error> {
     let row = sqlx::query_as!(
         ShowCore,
-        "SELECT id, tmdb_id, name, overview, poster_path FROM show WHERE id = $1",
+        "SELECT id, tmdb_id, name, slug, overview, poster_path FROM show WHERE id = $1",
         id
     )
     .fetch_optional(pool)
@@ -55,14 +133,17 @@ pub async fn upsert_show(
     executor: impl sqlx::PgExecutor<'_>,
     tmdb_id: i64,
     name: &str,
+    slug: &str,
     first_air_year: Option<i32>,
     poster_path: Option<&str>,
     overview: Option<&str>,
 ) -> Result<Uuid, sqlx::Error> {
+    // The slug is set only on insert; a re-import (rename) keeps the original
+    // slug so existing links stay valid.
     let id = sqlx::query_scalar!(
         r#"
-        INSERT INTO show (tmdb_id, name, first_air_year, poster_path, overview, last_synced_at)
-        VALUES ($1, $2, $3, $4, $5, now())
+        INSERT INTO show (tmdb_id, name, slug, first_air_year, poster_path, overview, last_synced_at)
+        VALUES ($1, $2, $3, $4, $5, $6, now())
         ON CONFLICT (tmdb_id) DO UPDATE SET
             name = EXCLUDED.name,
             first_air_year = EXCLUDED.first_air_year,
@@ -73,6 +154,7 @@ pub async fn upsert_show(
         "#,
         tmdb_id,
         name,
+        slug,
         first_air_year,
         poster_path,
         overview,
@@ -375,4 +457,24 @@ pub async fn recompute_all_scores(pool: &PgPool) -> Result<u64, sqlx::Error> {
     .execute(pool)
     .await?;
     Ok(res.rows_affected())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::slugify;
+
+    #[test]
+    fn slugify_basic() {
+        assert_eq!(slugify("Star Trek: The Next Generation"), "star-trek-the-next-generation");
+        assert_eq!(slugify("Marvel's Agents of S.H.I.E.L.D."), "marvel-s-agents-of-s-h-i-e-l-d");
+        assert_eq!(slugify("WandaVision"), "wandavision");
+    }
+
+    #[test]
+    fn slugify_collapses_and_trims() {
+        assert_eq!(slugify("  Hello —— World!!  "), "hello-world");
+        assert_eq!(slugify("12 Monkeys"), "12-monkeys");
+        assert_eq!(slugify("---"), "");
+        assert_eq!(slugify("ＡＢＣ"), ""); // non-ascii letters drop → caller falls back to tmdb id
+    }
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT tmdb_id, id FROM show WHERE tmdb_id = ANY($1)",
+  "query": "SELECT tmdb_id, id, slug FROM show WHERE tmdb_id = ANY($1)",
   "describe": {
     "columns": [
       {
@@ -12,6 +12,11 @@
         "ordinal": 1,
         "name": "id",
         "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "slug",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -21,8 +26,9 @@
     },
     "nullable": [
       false,
+      false,
       false
     ]
   },
-  "hash": "e162fcc31248c9168b345cf6f00acf83557b641085a389fd58e623702d5ddf00"
+  "hash": "e30ce2d687c778480d0fe401a49a8462b4705811dd737fc0f57e46a80df9bdec"
 }

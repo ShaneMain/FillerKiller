@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   getEpisodes,
   getShow,
@@ -12,6 +12,7 @@ import { EpisodeRow } from "../components/EpisodeRow";
 
 export function ShowPage() {
   const { id = "" } = useParams();
+  const navigate = useNavigate();
   const { user } = useAuth();
   const [show, setShow] = useState<ShowDetail | null>(null);
   const [season, setSeason] = useState<number | null>(null);
@@ -27,6 +28,12 @@ export function ShowPage() {
     getShow(id)
       .then((s) => {
         if (!active) return;
+        // Canonicalize the address bar to the slug (entry via tmdb:<n> or a
+        // legacy UUID rewrites to /shows/<slug> without a history entry).
+        if (s.slug && id !== s.slug) {
+          navigate(`/shows/${encodeURIComponent(s.slug)}`, { replace: true });
+          return;
+        }
         setShow(s);
         const seasons = s.seasons.map((x) => x.seasonNumber);
         setSeason(seasons.includes(1) ? 1 : (seasons.find((n) => n > 0) ?? seasons[0] ?? null));
@@ -35,7 +42,7 @@ export function ShowPage() {
     return () => {
       active = false;
     };
-  }, [id]);
+  }, [id, navigate]);
 
   // Load episodes for the selected season (re-runs when sign-in changes to refresh myVote).
   useEffect(() => {
@@ -87,7 +94,7 @@ export function ShowPage() {
 
       <div className="mt-4">
         <Link
-          to={`/shows/${encodeURIComponent(id)}/skip-guide`}
+          to={`/shows/${encodeURIComponent(show.slug)}/skip-guide`}
           className="inline-flex items-center gap-1 rounded-md bg-zinc-100 px-3 py-1.5 text-sm font-medium text-zinc-900 hover:bg-white"
         >
           View skip guide →

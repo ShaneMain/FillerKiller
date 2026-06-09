@@ -313,21 +313,26 @@ async fn search(
 
     let found = state.tmdb.search_shows(q).await?;
     let tmdb_ids: Vec<i64> = found.results.iter().map(|r| r.id).collect();
-    let imported: HashMap<i64, Uuid> = db::imported_show_ids(&state.pool, &tmdb_ids)
+    let imported: HashMap<i64, db::ImportedShow> = db::imported_show_ids(&state.pool, &tmdb_ids)
         .await?
         .into_iter()
+        .map(|s| (s.tmdb_id, s))
         .collect();
 
     let results = found
         .results
         .into_iter()
-        .map(|r| SearchItem {
-            show_id: imported.get(&r.id).copied(),
-            tmdb_id: r.id,
-            name: r.name,
-            first_air_year: r.first_air_date.as_deref().and_then(import::parse_year),
-            poster_path: r.poster_path,
-            filler_coverage: None, // computed with the voting layer
+        .map(|r| {
+            let imp = imported.get(&r.id);
+            SearchItem {
+                show_id: imp.map(|s| s.id),
+                slug: imp.map(|s| s.slug.clone()),
+                tmdb_id: r.id,
+                name: r.name,
+                first_air_year: r.first_air_date.as_deref().and_then(import::parse_year),
+                poster_path: r.poster_path,
+                filler_coverage: None, // computed with the voting layer
+            }
         })
         .collect();
 
@@ -350,6 +355,7 @@ async fn get_show(
         id: core.id,
         tmdb_id: core.tmdb_id,
         name: core.name,
+        slug: core.slug,
         overview: core.overview,
         poster_path: core.poster_path,
         seasons,
