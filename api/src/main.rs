@@ -571,6 +571,18 @@ fn html_response(html: String) -> Response {
         .into_response()
 }
 
+/// Serve the SPA shell with a 404 status (and a short cache) for an SEO route
+/// whose target doesn't exist — so crawlers see a true "not found" instead of a
+/// soft 404, while the browser still renders the SPA's own not-found UI.
+fn not_found_html(html: String) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        [(axum::http::header::CACHE_CONTROL, "public, max-age=60")],
+        Html(html),
+    )
+        .into_response()
+}
+
 /// Look up a show by slug only (never imports) for the server-rendered pages.
 async fn show_core_by_slug(state: &AppState, slug: &str) -> Option<db::ShowCore> {
     match db::find_show_id_by_slug(&state.pool, slug).await {
@@ -586,17 +598,24 @@ async fn show_html(State(state): State<AppState>, Path(slug): Path<String>) -> R
     let Some(template) = state.index_html.clone() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let html = match show_core_by_slug(&state, &slug).await {
+    match show_core_by_slug(&state, &slug).await {
         Some(core) => {
             let seasons = db::seasons_with_counts(&state.pool, core.id)
                 .await
                 .unwrap_or_default();
             let image = state.tmdb.image_url(core.poster_path.as_deref(), "w500");
-            seo::show_page(&template, &state.auth.base_url, &core, &seasons, image)
+            html_response(seo::show_page(
+                &template,
+                &state.auth.base_url,
+                &core,
+                &seasons,
+                image,
+            ))
         }
-        None => template.as_str().to_string(),
-    };
-    html_response(html)
+        // Unknown show → real 404, not a soft 404; the SPA still renders its own
+        // not-found page from the shell.
+        None => not_found_html(template.as_str().to_string()),
+    }
 }
 
 /// `GET /shows/{slug}/skip-guide` — server-rendered skip guide (the watch/skip
@@ -605,7 +624,7 @@ async fn skip_guide_html(State(state): State<AppState>, Path(slug): Path<String>
     let Some(template) = state.index_html.clone() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let html = match show_core_by_slug(&state, &slug).await {
+    match show_core_by_slug(&state, &slug).await {
         Some(core) => {
             let episodes = db::episodes_with_scores(&state.pool, core.id, None, None)
                 .await
@@ -623,11 +642,17 @@ async fn skip_guide_html(State(state): State<AppState>, Path(slug): Path<String>
                 })
                 .collect();
             let guide = build_skip_guide(&scored, ContestedHandling::Canon, false);
-            seo::skip_guide_page(&template, &state.auth.base_url, &core, &guide)
+            let image = state.tmdb.image_url(core.poster_path.as_deref(), "w500");
+            html_response(seo::skip_guide_page(
+                &template,
+                &state.auth.base_url,
+                &core,
+                &guide,
+                image,
+            ))
         }
-        None => template.as_str().to_string(),
-    };
-    html_response(html)
+        None => not_found_html(template.as_str().to_string()),
+    }
 }
 
 /// `GET /shows/{slug}/guides/{guide_id}` — server-rendered share page for a
@@ -640,23 +665,31 @@ async fn guide_html(
     let Some(template) = state.index_html.clone() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let html = match Uuid::parse_str(&guide_id) {
+    match Uuid::parse_str(&guide_id) {
         Ok(gid) => match guides::get_guide(&state.pool, gid, None).await {
             Ok(Some(guide)) if guide.is_published => {
                 let image = state.tmdb.image_url(guide.poster_path.as_deref(), "w500");
-                seo::guide_page(&template, &state.auth.base_url, &guide, image)
+                html_response(seo::guide_page(
+                    &template,
+                    &state.auth.base_url,
+                    &guide,
+                    image,
+                ))
             }
-            _ => template.as_str().to_string(),
+            // A valid id that isn't a published guide (missing or a draft) → 404.
+            _ => not_found_html(template.as_str().to_string()),
         },
-        Err(_) => template.as_str().to_string(),
-    };
-    html_response(html)
+        // Not a UUID (e.g. the SPA-only `/guides/new` route) → plain shell, 200.
+        Err(_) => html_response(template.as_str().to_string()),
+    }
 }
 
-/// `GET /sitemap.xml` — generated from the catalog: stable routes + every show.
+/// `GET /sitemap.xml` — generated from the catalog: stable routes, every show
+/// (+ its skip guide), and every published user guide, each with a `<lastmod>`.
 async fn sitemap(State(state): State<AppState>) -> Response {
-    let slugs = db::all_show_slugs(&state.pool).await.unwrap_or_default();
-    let xml = seo::sitemap_xml(&state.auth.base_url, &slugs);
+    let shows = db::sitemap_shows(&state.pool).await.unwrap_or_default();
+    let guides = db::sitemap_guides(&state.pool).await.unwrap_or_default();
+    let xml = seo::sitemap_xml(&state.auth.base_url, &shows, &guides);
     (
         [
             (

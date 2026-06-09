@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT s.slug AS show_slug, g.id, g.updated_at\n           FROM skip_guide g\n           JOIN show s ON s.id = g.show_id\n           WHERE g.is_published\n           ORDER BY g.updated_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "show_slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7fcbda70722d32476f7cfca2898f0da5c4605df82aa33dd20e54b3678f5e962b"
+}

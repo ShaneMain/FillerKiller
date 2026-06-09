@@ -8,10 +8,11 @@
 //! This is plain string templating, not a JS SSR runtime, so it stays inside the
 //! single Rust container. Also builds the DB-driven sitemap.
 
-use crate::db::ShowCore;
+use crate::db::{ShowCore, SitemapGuide, SitemapShow};
 use crate::guides::{Disposition, GuideDetail};
 use crate::models::SeasonSummary;
 use crate::scoring::{SkipGuide, SkipGuideEntry};
+use serde_json::{json, Value};
 
 const SITE: &str = "FillerKiller";
 
@@ -98,6 +99,46 @@ fn head_tags(m: &PageMeta) -> String {
     s
 }
 
+/// Serialize a JSON-LD value into a `<script type="application/ld+json">` block.
+/// serde_json does not escape `<`, `>`, or `&`, so we escape them to their
+/// `\uXXXX` forms — that keeps the payload valid JSON while making it impossible
+/// to break out of the `<script>` element (a literal `</script>`) or be misread.
+fn json_ld(value: &Value) -> String {
+    let raw = value.to_string();
+    let mut esc = String::with_capacity(raw.len() + 8);
+    for c in raw.chars() {
+        match c {
+            '<' => esc.push_str("\\u003c"),
+            '>' => esc.push_str("\\u003e"),
+            '&' => esc.push_str("\\u0026"),
+            _ => esc.push(c),
+        }
+    }
+    format!("<script type=\"application/ld+json\">{esc}</script>")
+}
+
+/// A schema.org `BreadcrumbList` from `(name, url)` pairs, in order from the site
+/// root. Surfaces breadcrumb rich results and clarifies site hierarchy to search.
+fn breadcrumb_ld(crumbs: &[(&str, &str)]) -> Value {
+    let items: Vec<Value> = crumbs
+        .iter()
+        .enumerate()
+        .map(|(i, (name, url))| {
+            json!({
+                "@type": "ListItem",
+                "position": i + 1,
+                "name": name,
+                "item": url,
+            })
+        })
+        .collect();
+    json!({
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        "itemListElement": items,
+    })
+}
+
 /// Inject a per-page head + content snapshot into the SPA shell. The snapshot is
 /// wrapped in a `hidden` element: it stays in the HTML source for crawlers/link
 /// unfurlers, but never paints for users — so there's no unstyled (and, on mobile,
@@ -128,13 +169,48 @@ pub fn show_page(
             core.name
         ),
     };
+    // The poster, if any, doubles as the social card; fall back to the site card
+    // so a posterless show still unfurls an image.
+    let card = image.clone().or_else(|| Some(format!("{base}/og-image.png")));
     let head = head_tags(&PageMeta {
-        title: format!("{} — {SITE}", core.name),
+        // Target the actual search intent ("is X filler", "what to skip") in the
+        // title — the strongest on-page CTR/ranking lever — not just the brand.
+        title: format!("{} Filler List — Which Episodes to Skip | {SITE}", core.name),
         description,
         canonical: canonical.clone(),
-        // Fall back to the site card so a posterless show still unfurls an image.
-        image: image.or_else(|| Some(format!("{base}/og-image.png"))),
+        image: card,
     });
+
+    // Structured data: a TVSeries carrying the TMDB rating as an AggregateRating
+    // (making the page eligible for star rich snippets) + a breadcrumb trail.
+    let mut series = json!({
+        "@context": "https://schema.org",
+        "@type": "TVSeries",
+        "name": core.name,
+        "url": canonical,
+    });
+    if let Some(img) = &image {
+        series["image"] = json!(img);
+    }
+    if !seasons.is_empty() {
+        series["numberOfSeasons"] = json!(seasons.len());
+    }
+    if let (Some(avg), Some(count)) = (core.tmdb_vote_average, core.tmdb_vote_count) {
+        if count > 0 {
+            series["aggregateRating"] = json!({
+                "@type": "AggregateRating",
+                "ratingValue": avg,
+                "ratingCount": count,
+                "bestRating": 10,
+                // TMDB's scale floor is 0 (obscure titles can rate below 1); a
+                // worstRating of 1 would make those pages fail rich-result
+                // validation when ratingValue < worstRating.
+                "worstRating": 0,
+            });
+        }
+    }
+    let crumbs = breadcrumb_ld(&[("Home", base), (&core.name, &canonical)]);
+    let head = format!("{head}{}{}", json_ld(&series), json_ld(&crumbs));
 
     let mut body = String::new();
     body.push_str(&format!("<h1>{}</h1>", html_escape(&core.name)));
@@ -164,9 +240,16 @@ pub fn show_page(
 }
 
 /// Render a skip-guide page with the watch/optional/skip lists as real content.
-pub fn skip_guide_page(template: &str, base: &str, core: &ShowCore, guide: &SkipGuide) -> String {
+pub fn skip_guide_page(
+    template: &str,
+    base: &str,
+    core: &ShowCore,
+    guide: &SkipGuide,
+    image: Option<String>,
+) -> String {
     let base = base.trim_end_matches('/');
     let canonical = format!("{base}/shows/{}/skip-guide", core.slug);
+    let show_url = format!("{base}/shows/{}", core.slug);
     let description = format!(
         "Crowd-sourced binge order for {}: {} to watch, {} optional, {} to skip.",
         core.name,
@@ -175,11 +258,18 @@ pub fn skip_guide_page(template: &str, base: &str, core: &ShowCore, guide: &Skip
         guide.skipped.len()
     );
     let head = head_tags(&PageMeta {
-        title: format!("Skip guide — {} — {SITE}", core.name),
+        title: format!("{} Skip Guide — Watch Order & What to Skip | {SITE}", core.name),
         description,
-        canonical,
-        image: None,
+        canonical: canonical.clone(),
+        // The show poster so shared skip-guide links unfurl an image.
+        image: image.or_else(|| Some(format!("{base}/og-image.png"))),
     });
+    let crumbs = breadcrumb_ld(&[
+        ("Home", base),
+        (&core.name, &show_url),
+        ("Skip guide", &canonical),
+    ]);
+    let head = format!("{head}{}", json_ld(&crumbs));
 
     let mut body = String::new();
     body.push_str(&format!("<h1>Skip guide: {}</h1>", html_escape(&core.name)));
@@ -202,13 +292,20 @@ pub fn guide_page(template: &str, base: &str, guide: &GuideDetail, image: Option
         Some(d) if !d.trim().is_empty() => truncate(d, 160),
         _ => format!("A {} skip guide: {w} to watch, {o} optional, {s} to skip.", guide.show_name),
     };
+    let show_url = format!("{base}/shows/{}", guide.show_slug);
     let head = head_tags(&PageMeta {
         title: format!("{} — {} skip guide — {SITE}", guide.title, guide.show_name),
         description,
-        canonical,
+        canonical: canonical.clone(),
         // The show poster, falling back to the site card.
         image: image.or_else(|| Some(format!("{base}/og-image.png"))),
     });
+    let crumbs = breadcrumb_ld(&[
+        ("Home", base),
+        (&guide.show_name, &show_url),
+        (&guide.title, &canonical),
+    ]);
+    let head = format!("{head}{}", json_ld(&crumbs));
 
     let mut body = String::new();
     body.push_str(&format!("<h1>{}</h1>", html_escape(&guide.title)));
@@ -269,25 +366,43 @@ fn render_bucket(body: &mut String, title: &str, entries: &[SkipGuideEntry]) {
 }
 
 /// Build the sitemap XML from the stable routes plus every show's pages.
-pub fn sitemap_xml(base: &str, slugs: &[String]) -> String {
+pub fn sitemap_xml(base: &str, shows: &[SitemapShow], guides: &[SitemapGuide]) -> String {
     let base = base.trim_end_matches('/');
     let mut s = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n",
     );
-    let mut url = |loc: String, priority: &str| {
-        s.push_str(&format!(
-            "  <url><loc>{}</loc><priority>{priority}</priority></url>\n",
-            html_escape(&loc)
-        ));
+    let mut url = |loc: String, priority: &str, lastmod: Option<&str>| {
+        s.push_str("  <url><loc>");
+        s.push_str(&html_escape(&loc));
+        s.push_str("</loc>");
+        if let Some(lm) = lastmod {
+            s.push_str(&format!("<lastmod>{lm}</lastmod>"));
+        }
+        s.push_str(&format!("<priority>{priority}</priority></url>\n"));
     };
-    url(format!("{base}/"), "1.0");
+    url(format!("{base}/"), "1.0", None);
     for path in ["about", "support", "privacy", "terms"] {
-        url(format!("{base}/{path}"), "0.3");
+        url(format!("{base}/{path}"), "0.3", None);
     }
-    for slug in slugs {
-        url(format!("{base}/shows/{slug}"), "0.7");
-        url(format!("{base}/shows/{slug}/skip-guide"), "0.6");
+    for show in shows {
+        // `lastmod` reflects the last catalog re-sync, signalling freshness so
+        // search engines prioritise re-crawling shows whose data changed.
+        let lastmod = show.last_synced_at.format("%Y-%m-%d").to_string();
+        url(format!("{base}/shows/{}", show.slug), "0.7", Some(&lastmod));
+        url(
+            format!("{base}/shows/{}/skip-guide", show.slug),
+            "0.6",
+            Some(&lastmod),
+        );
+    }
+    for guide in guides {
+        let lastmod = guide.updated_at.format("%Y-%m-%d").to_string();
+        url(
+            format!("{base}/shows/{}/guides/{}", guide.show_slug, guide.id),
+            "0.5",
+            Some(&lastmod),
+        );
     }
     s.push_str("</urlset>\n");
     s
@@ -361,11 +476,70 @@ mod tests {
     }
 
     #[test]
-    fn sitemap_lists_static_and_show_routes() {
-        let xml = sitemap_xml("https://fillerkiller.app/", &["breaking-bad".into()]);
+    fn sitemap_lists_static_show_and_guide_routes() {
+        use crate::db::{SitemapGuide, SitemapShow};
+        let ts = "2024-05-01T00:00:00Z".parse().unwrap();
+        let shows = vec![SitemapShow {
+            slug: "breaking-bad".into(),
+            last_synced_at: ts,
+        }];
+        let guides = vec![SitemapGuide {
+            show_slug: "breaking-bad".into(),
+            id: uuid::Uuid::nil(),
+            updated_at: ts,
+        }];
+        let xml = sitemap_xml("https://fillerkiller.app/", &shows, &guides);
         assert!(xml.contains("<loc>https://fillerkiller.app/</loc>"));
         assert!(xml.contains("<loc>https://fillerkiller.app/shows/breaking-bad</loc>"));
         assert!(xml.contains("<loc>https://fillerkiller.app/shows/breaking-bad/skip-guide</loc>"));
         assert!(xml.contains("<loc>https://fillerkiller.app/privacy</loc>"));
+        assert!(xml.contains("<lastmod>2024-05-01</lastmod>"));
+        assert!(xml.contains(
+            "<loc>https://fillerkiller.app/shows/breaking-bad/guides/00000000-0000-0000-0000-000000000000</loc>"
+        ));
+    }
+
+    #[test]
+    fn show_page_emits_tvseries_jsonld_and_intent_title() {
+        let core = ShowCore {
+            id: uuid::Uuid::nil(),
+            tmdb_id: 1396,
+            name: "Breaking Bad".into(),
+            slug: "breaking-bad".into(),
+            overview: Some("A chemistry teacher turns to crime.".into()),
+            poster_path: Some("/poster.jpg".into()),
+            tmdb_vote_average: Some(8.9),
+            tmdb_vote_count: Some(12000),
+        };
+        let tmpl =
+            "<head><!--head--><title>D</title><!--/head--></head><body><div id=\"root\"></div></body>";
+        let out = show_page(
+            tmpl,
+            "https://fillerkiller.app",
+            &core,
+            &[],
+            Some("https://img.example/poster.jpg".into()),
+        );
+        assert!(
+            out.contains(
+                "<title>Breaking Bad Filler List — Which Episodes to Skip | FillerKiller</title>"
+            ),
+            "{out}"
+        );
+        assert!(out.contains("\"@type\":\"TVSeries\""), "{out}");
+        assert!(out.contains("\"aggregateRating\""), "{out}");
+        assert!(out.contains("\"ratingValue\":8.9"), "{out}");
+        assert!(out.contains("\"ratingCount\":12000"), "{out}");
+        assert!(out.contains("\"@type\":\"BreadcrumbList\""), "{out}");
+    }
+
+    #[test]
+    fn json_ld_escapes_script_breakout() {
+        // A `<`/`>`/`&` in JSON-LD data must become a `\uXXXX` escape so a value
+        // containing `</script>` can't terminate the script element.
+        let v = json!({ "name": "</script><b>&" });
+        let out = json_ld(&v);
+        assert!(!out.contains("</script><b>"), "{out}");
+        assert!(out.contains("\\u003c/script\\u003e\\u003cb\\u003e\\u0026"), "{out}");
     }
 }

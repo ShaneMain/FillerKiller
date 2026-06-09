@@ -2,7 +2,7 @@
 //! (`query!`/`query_as!`) — verified against the schema at build time, with the
 //! offline `.sqlx` cache committed so builds don't need a live DB.
 
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -159,12 +159,45 @@ pub async fn find_show_id_by_slug(pool: &PgPool, slug: &str) -> Result<Option<Uu
     Ok(row)
 }
 
-/// Every show's slug, for the sitemap. Ordered by name for a stable listing.
-pub async fn all_show_slugs(pool: &PgPool) -> Result<Vec<String>, sqlx::Error> {
-    let slugs = sqlx::query_scalar!("SELECT slug FROM show ORDER BY name")
-        .fetch_all(pool)
-        .await?;
-    Ok(slugs)
+/// A show's sitemap entry: its slug and when it was last re-synced (used as the
+/// sitemap `<lastmod>`, signalling freshness to crawlers).
+pub struct SitemapShow {
+    pub slug: String,
+    pub last_synced_at: DateTime<Utc>,
+}
+
+/// Every show, for the sitemap, with a freshness timestamp. Ordered by name.
+pub async fn sitemap_shows(pool: &PgPool) -> Result<Vec<SitemapShow>, sqlx::Error> {
+    let rows = sqlx::query_as!(
+        SitemapShow,
+        "SELECT slug, last_synced_at FROM show ORDER BY name"
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// A published user-authored guide's sitemap entry.
+pub struct SitemapGuide {
+    pub show_slug: String,
+    pub id: Uuid,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Every published user guide, joined to its show's slug, for the sitemap.
+/// Drafts are excluded — they're not crawlable.
+pub async fn sitemap_guides(pool: &PgPool) -> Result<Vec<SitemapGuide>, sqlx::Error> {
+    let rows = sqlx::query_as!(
+        SitemapGuide,
+        r#"SELECT s.slug AS show_slug, g.id, g.updated_at
+           FROM skip_guide g
+           JOIN show s ON s.id = g.show_id
+           WHERE g.is_published
+           ORDER BY g.updated_at DESC"#
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
 }
 
 /// Every show's TMDB id, for the `refresh-catalog` backfill.

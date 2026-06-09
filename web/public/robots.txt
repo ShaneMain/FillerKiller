@@ -1,3 +1,7 @@
+# Crawler policy. Enforcement (allow/block of specific bots, incl. AI crawlers)
+# lives at the Cloudflare edge, not here — this file just opens the site to all
+# crawlers and points to the sitemap.
+
 User-agent: *
 Allow: /
 
