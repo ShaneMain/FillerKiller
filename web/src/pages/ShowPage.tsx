@@ -118,12 +118,16 @@ export function ShowPage() {
         <div className="min-w-0">
           <h1 className="text-2xl font-bold">{show.name}</h1>
           {show.tmdbRating != null && show.tmdbVoteCount != null && show.tmdbVoteCount > 0 && (
-            <p
-              className="mt-1 text-sm text-amber-300"
-              title={`TMDB rating ${show.tmdbRating.toFixed(1)}/10 from ${show.tmdbVoteCount.toLocaleString()} votes`}
+            <a
+              href={`https://www.themoviedb.org/tv/${show.tmdbId}`}
+              target="_blank"
+              rel="noreferrer"
+              title={`TMDB rating ${show.tmdbRating.toFixed(1)}/10 from ${show.tmdbVoteCount.toLocaleString()} votes — view on TMDB`}
+              className="mt-1 inline-flex items-center gap-1.5 text-sm font-medium text-amber-300 hover:text-amber-200"
             >
-              ★ {show.tmdbRating.toFixed(1)} <span className="text-zinc-500">on TMDB</span>
-            </p>
+              <span>★ {show.tmdbRating.toFixed(1)}</span>
+              <img src="/tmdb-square.svg" alt="TMDB" className="h-4 w-auto" />
+            </a>
           )}
           {show.overview && <p className="mt-2 text-sm text-zinc-400 line-clamp-4">{show.overview}</p>}
         </div>
