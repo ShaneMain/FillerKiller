@@ -35,6 +35,14 @@ whether each episode is essential canon, fun-but-skippable, or pure filler, and 
   **optional** (worth-watching), and **skipped** (filler). When the crowd is unsure, the
   guide keeps the episode in the watch list — wrongly skipping canon is worse than
   wrongly watching filler.
+- **Write and share your own skip guides.** Beyond the crowd-derived guide, signed-in
+  users can curate a per-episode guide for a show, publish it, and others can browse and
+  **upvote** it — capped at five published guides per show to keep them curated.
+- **TMDB ratings** for the show and each episode sit alongside the crowd verdict, so you
+  can weigh "is it filler?" against "is it any good?".
+- **Your account, your data.** Sign in with Google or GitHub to vote; set an optional
+  **screen name** that displays instead of your provider name. Deleting your account
+  removes your guides but **keeps your votes (anonymized)** — the crowd data stays intact.
 
 ## Stack
 
@@ -50,19 +58,33 @@ The SPA talks only to the API; the API holds the TMDB token, so it never reaches
 browser. The catalog is cached hard and both the compute and the database can scale to
 zero, so the dominant costs are storage and bandwidth rather than compute.
 
+Two extras worth calling out:
+
+- **SEO without a JS runtime.** For crawlers and link unfurlers, the API server-renders
+  the show, skip-guide, and shared-guide pages — per-page title / Open Graph / JSON-LD
+  (`TVSeries` + `AggregateRating` + breadcrumbs) plus a crawlable content snapshot — and
+  serves a DB-driven `sitemap.xml`. The React app then hydrates over the top.
+- **A self-healing catalog.** An imported show refreshes its TMDB metadata and ratings in
+  the background when viewed, gated by a TTL and tiered by recency — a long-ended series
+  refreshes far less often than one still airing — so the cache stays fresh with minimal
+  TMDB calls and never blocks a request.
+
 ## Layout
 
 ```
 api/                       Rust + Axum service
   src/main.rs              app wiring, routing, CORS, health
   src/scoring.rs           filler score + status + skip-guide math (pure functions)
-  src/import.rs            import-on-demand from TMDB
+  src/import.rs            import-on-demand + self-healing refresh from TMDB
   src/tmdb.rs              server-side TMDB client
+  src/db.rs                database access (compile-time-checked queries)
+  src/guides.rs            user-authored skip guides (create / list / like)
+  src/seo.rs               server-rendered pages + sitemap for crawlers
   src/auth.rs / oauth.rs   OAuth → JWT session cookie
   migrations/             SQL schema + migrations
   Dockerfile              container build
 web/                       React + Vite SPA
-  src/pages/              search, show, skip-guide, login
+  src/pages/              search, show, skip-guide, guides, account, login, legal
   src/lib/api.ts          API client
 deploy/                    Docker Compose + deploy runbook
 Dockerfile                 single image: builds the SPA + API together
@@ -110,16 +132,29 @@ npm run dev                # http://localhost:5173
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/api/search?q=` | Proxy TMDB search; annotates already-imported shows. |
-| `GET` | `/api/shows/{id}` | Show + seasons. `{id}` is our UUID or `tmdb:<n>` (imports on demand). |
-| `GET` | `/api/shows/{id}/episodes?season=` | Episodes with aggregate scores; `myVote` when signed in. |
+| `GET` | `/api/shows/{id}` | Show + seasons + TMDB rating. `{id}` is a slug, our UUID, or `tmdb:<n>` (imports on demand). |
+| `GET` | `/api/shows/{id}/episodes?season=` | Episodes with aggregate scores + TMDB ratings; `myVote` when signed in. |
 | `GET` | `/api/shows/{id}/skip-guide` | The watch / optional / skipped partition for the show. |
+| `GET` | `/api/shows/{id}/guides` | Published user-authored guides for the show. |
+| `POST` | `/api/shows/{id}/guides` | Create a guide (max 5 published per show). Auth required. |
+| `GET` | `/api/guides/{id}` | A user guide's detail (drafts visible only to the author). |
+| `PUT` `DELETE` | `/api/guides/{id}` | Update / delete your own guide. Auth required. |
+| `PUT` `DELETE` | `/api/guides/{id}/like` | Add / remove your upvote. Auth required. |
 | `PUT` | `/api/episodes/{id}/vote` | Cast/change a vote: `{ "value": "FILLER" \| "WORTH_WATCHING" \| "CANON" }`. Auth required. |
 | `DELETE` | `/api/episodes/{id}/vote` | Remove the caller's vote. Auth required. |
-| `GET` | `/api/auth/{provider}/login` | OAuth sign-in (`google` / `github`). |
+| `GET` | `/api/auth/{provider}/login` | OAuth sign-in (`google` / `github`); `?next=` returns you to where you started. |
 | `GET` | `/api/auth/{provider}/callback` | OAuth callback → sets the session cookie. |
 | `POST` | `/api/auth/logout` | Clear the session. |
 | `GET` | `/api/me` | Current user (from the session cookie) or `null`. |
+| `PUT` | `/api/me` | Update your optional screen name. Auth required. |
+| `DELETE` | `/api/me` | Delete your account; guides removed, votes kept anonymized. Auth required. |
+| `GET` | `/api/me/guides` | Your own guides, published or draft. Auth required. |
 | `GET` | `/health`, `/health/db` | Liveness / DB readiness. |
+
+When the API also serves the SPA, the SEO routes `/shows/{slug}`,
+`/shows/{slug}/skip-guide`, and `/shows/{slug}/guides/{id}` return server-rendered HTML
+(unknown shows / unpublished guides get a real `404`), alongside `/sitemap.xml` and a
+static `/robots.txt`.
 
 **Auth** is OAuth → a stateless JWT in an httpOnly cookie. To test sign-in locally,
 register an OAuth app, set its redirect URI to
