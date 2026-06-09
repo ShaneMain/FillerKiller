@@ -3,8 +3,10 @@ import { Link, useParams } from "react-router-dom";
 import {
   getShow,
   getSkipGuide,
+  imageUrl,
   listGuides,
   type GuideSummary,
+  type ShowDetail,
   type SkipGuide,
   type SkipGuideEntry,
 } from "../lib/api";
@@ -18,8 +20,9 @@ type Tab = "community" | "user";
 
 export function SkipGuidePage() {
   const { id = "" } = useParams();
-  const [name, setName] = useState<string | null>(null);
+  const [show, setShow] = useState<ShowDetail | null>(null);
   const [tab, setTab] = useState<Tab>("community");
+  const name = show?.name ?? null;
   usePageMeta(
     name ? `Skip guide — ${name}` : "Skip guide",
     name ? `Crowd-sourced binge-ready watch order for ${name}.` : undefined,
@@ -27,18 +30,33 @@ export function SkipGuidePage() {
 
   useEffect(() => {
     let active = true;
-    getShow(id).then((s) => active && setName(s.name)).catch(() => {});
+    getShow(id).then((s) => active && setShow(s)).catch(() => {});
     return () => {
       active = false;
     };
   }, [id]);
+
+  const poster = imageUrl(show?.posterPath ?? null, "w154");
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8">
       <Link to={`/shows/${encodeURIComponent(id)}`} className="mb-4 inline-block text-sm text-zinc-400 hover:text-zinc-200">
         ← {name ?? "Show"}
       </Link>
-      <h1 className="text-2xl font-bold">Skip guide</h1>
+
+      <div className="flex items-center gap-3">
+        {poster && (
+          <img
+            src={poster}
+            alt={`${name ?? "Show"} poster`}
+            className="h-20 w-14 shrink-0 rounded object-cover"
+          />
+        )}
+        <div className="min-w-0">
+          <h1 className="text-2xl font-bold">Skip guide</h1>
+          {name && <p className="truncate text-sm text-zinc-400">{name}</p>}
+        </div>
+      </div>
 
       <div className="mt-4 flex gap-1 border-b border-zinc-800" role="tablist">
         <TabButton active={tab === "community"} onClick={() => setTab("community")}>

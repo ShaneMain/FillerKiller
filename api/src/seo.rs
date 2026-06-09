@@ -98,12 +98,15 @@ fn head_tags(m: &PageMeta) -> String {
     s
 }
 
-/// Inject a per-page head + content snapshot into the SPA shell.
+/// Inject a per-page head + content snapshot into the SPA shell. The snapshot is
+/// wrapped in a `hidden` element: it stays in the HTML source for crawlers/link
+/// unfurlers, but never paints for users — so there's no unstyled (and, on mobile,
+/// desktop-looking) flash before React mounts and replaces `#root`.
 pub fn render_page(template: &str, head: &str, snapshot: &str) -> String {
     let with_head = replace_between(template, HEAD_OPEN, HEAD_CLOSE, head);
     with_head.replacen(
         ROOT_EMPTY,
-        &format!("<div id=\"root\">{snapshot}</div>"),
+        &format!("<div id=\"root\"><div hidden>{snapshot}</div></div>"),
         1,
     )
 }
@@ -316,7 +319,7 @@ mod tests {
         assert!(out.contains("<title>Custom</title>"));
         assert!(!out.contains("Default"));
         assert!(!out.contains("<!--head-->"));
-        assert!(out.contains("<div id=\"root\"><h1>Hi</h1></div>"));
+        assert!(out.contains("<div id=\"root\"><div hidden><h1>Hi</h1></div></div>"));
     }
 
     #[test]

@@ -31,9 +31,21 @@ export function AboutPage() {
           <a href="https://www.themoviedb.org/" target="_blank" rel="noreferrer" className="underline hover:text-zinc-100">
             TMDB
           </a>
-          . FillerKiller uses the TMDB API but is not endorsed or certified by TMDB. The votes
-          and the resulting verdicts are contributed by FillerKiller's community.
+          . The votes and the resulting verdicts are contributed by FillerKiller's community.
         </p>
+        <div className="mt-2 flex flex-col gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 sm:flex-row sm:items-center sm:gap-4">
+          <a
+            href="https://www.themoviedb.org/"
+            target="_blank"
+            rel="noreferrer"
+            className="shrink-0"
+          >
+            <img src="/tmdb.svg" alt="TMDB" className="h-6 w-auto" />
+          </a>
+          <p className="text-sm text-zinc-400">
+            This product uses the TMDB API but is not endorsed or certified by TMDB.
+          </p>
+        </div>
         <h2 className="pt-2 text-lg font-semibold text-zinc-100">Open source</h2>
         <p>
           FillerKiller is open source under the GPL-3.0 license. The code lives on{" "}
