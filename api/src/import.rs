@@ -186,6 +186,7 @@ pub async fn import_show(tmdb: &TmdbClient, pool: &PgPool, tmdb_id: i64) -> Resu
     tx.commit().await?;
 
     tracing::info!("imported show tmdb:{tmdb_id} ({})", detail.name);
+    metrics::counter!("show_imports_total").increment(1);
     Ok(show_id)
 }
 

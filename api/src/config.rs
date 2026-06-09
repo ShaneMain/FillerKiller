@@ -37,6 +37,14 @@ pub struct Config {
     /// one service, e.g. Cloud Run). Unset → don't serve static files (the box
     /// deploy serves the SPA via Caddy instead).
     pub static_dir: Option<String>,
+    /// Address for the PRIVATE metrics listener (Prometheus `/metrics`). Bound on
+    /// a different port from the public API so it is never reachable via the
+    /// public ingress. Defaults to `127.0.0.1:9090` (loopback) — safe by default,
+    /// and the Cloud Run GMP collector sidecar still reaches it because sidecars
+    /// share the instance's localhost. Set `METRICS_ADDR=0.0.0.0:9090` to let a
+    /// scraper on another container/host reach it; set `METRICS_ADDR=` (empty) to
+    /// disable the endpoint.
+    pub metrics_addr: Option<String>,
     /// Auth settings (OAuth + JWT).
     pub auth: AuthConfig,
 }
@@ -92,6 +100,11 @@ impl Config {
                 .parse()
                 .unwrap_or(360),
             static_dir: std::env::var("STATIC_DIR").ok().filter(|s| !s.trim().is_empty()),
+            metrics_addr: std::env::var("METRICS_ADDR")
+                .map(|s| s.trim().to_string())
+                .map(|s| if s.is_empty() { None } else { Some(s) })
+                // Unset → default on (loopback). Explicit empty (`METRICS_ADDR=`) → disabled.
+                .unwrap_or_else(|_| Some("127.0.0.1:9090".to_string())),
             auth: {
                 let base_url = optional("AUTH_BASE_URL", "http://localhost:8080");
                 AuthConfig {

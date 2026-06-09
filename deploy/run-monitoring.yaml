@@ -1,0 +1,20 @@
+# RunMonitoring — scrape config for the Cloud Run GMP collector sidecar.
+#
+# The default sidecar config scrapes :8080/metrics, but 8080 is our PUBLIC ingress
+# port. The API serves Prometheus metrics on a PRIVATE, instance-local port (9090,
+# see METRICS_ADDR) that Cloud Run never routes public traffic to — the sidecar
+# reaches it over localhost. So we override the scrape target to 9090.
+#
+# Store this in Secret Manager and mount it into the collector (see
+# deploy/cloudrun-service.yaml and the README):
+#   gcloud secrets create fk-run-monitoring --data-file=deploy/run-monitoring.yaml
+#   # on change: gcloud secrets versions add fk-run-monitoring --data-file=deploy/run-monitoring.yaml
+apiVersion: monitoring.googleapis.com/v1beta
+kind: RunMonitoring
+metadata:
+  name: fillerkiller-api
+spec:
+  endpoints:
+    - port: 9090
+      path: /metrics
+      interval: 30s

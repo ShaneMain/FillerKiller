@@ -15,6 +15,7 @@ mod rate_limit;
 mod response;
 mod scoring;
 mod seo;
+mod telemetry;
 mod tmdb;
 
 use std::collections::HashMap;
@@ -91,6 +92,10 @@ async fn main() -> anyhow::Result<()> {
         ),
         None => {}
     }
+
+    // Install the global metrics recorder before anything can emit. Long-running
+    // serve only (the maintenance subcommands above return first).
+    let metrics_handle = telemetry::install_recorder()?;
 
     // Lazy connect: the binary boots without a live DB, and serverless Postgres
     // can be cold. Keep the pool small — serverless Postgres caps connections.
@@ -221,6 +226,10 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let app = app
+        // `route_layer` runs only for matched routes, so `MatchedPath` is set and
+        // RED labels use the route template — and unmatched/static-fallback
+        // requests don't generate metric series.
+        .route_layer(axum::middleware::from_fn(telemetry::track_metrics))
         .layer(axum::middleware::from_fn(security_headers))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
@@ -228,7 +237,23 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&config.bind_addr).await?;
     tracing::info!("FillerKiller API listening on {}", config.bind_addr);
-    axum::serve(listener, app).await?;
+    let main_server = axum::serve(listener, app);
+
+    // Serve `/metrics` on its own private listener (off the public ingress port)
+    // when configured. Run it alongside the API; if either exits, so does the
+    // process.
+    match config.metrics_addr.clone() {
+        Some(addr) => {
+            let metrics_listener = tokio::net::TcpListener::bind(&addr).await?;
+            tracing::info!("metrics listening on {addr} (/metrics, private)");
+            let metrics_server = axum::serve(metrics_listener, telemetry::metrics_router(metrics_handle));
+            tokio::try_join!(
+                async { main_server.await.map_err(anyhow::Error::from) },
+                async { metrics_server.await.map_err(anyhow::Error::from) },
+            )?;
+        }
+        None => main_server.await?,
+    }
     Ok(())
 }
 
@@ -745,6 +770,7 @@ async fn put_vote(
     }
 
     db::upsert_vote(&state.pool, user.id, episode_id, body.value.as_db()).await?;
+    metrics::counter!("votes_total", "value" => body.value.as_db()).increment(1);
     let resp = vote_response(&state, episode_id, Some(body.value)).await?;
     Ok(private_json(&resp))
 }

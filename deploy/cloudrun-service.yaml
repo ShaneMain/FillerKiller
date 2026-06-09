@@ -1,0 +1,130 @@
+# Multi-container Cloud Run service: the API + a Google Managed Service for
+# Prometheus (GMP) collector sidecar that scrapes the API's private /metrics port
+# and pushes to Managed Prometheus. Grafana reads it back via the Cloud Monitoring
+# data source (PromQL). See deploy/README.md → "App metrics (GMP sidecar)".
+#
+# This REPLACES the single-container `gcloud run deploy --source .` for deploys
+# that want app-level metrics. Because a sidecar needs a pre-built image, the flow
+# is: build/push the API image, fill the placeholders below, then:
+#   gcloud run services replace deploy/cloudrun-service.yaml --region $REGION
+#
+# Placeholders to substitute (PROJECT_ID, REGION, IMAGE, DOMAIN, *_CLIENT_ID):
+#   sed -e "s/PROJECT_ID/$PROJECT/g" -e "s/REGION/$REGION/g" \
+#       -e "s|IMAGE|$IMAGE|g" -e "s/DOMAIN/$DOMAIN/g" \
+#       -e "s/GOOGLE_CLIENT_ID_VALUE/$GOOGLE_CLIENT_ID/g" \
+#       -e "s/GITHUB_CLIENT_ID_VALUE/$GITHUB_CLIENT_ID/g" \
+#       deploy/cloudrun-service.yaml | gcloud run services replace - --region $REGION
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: fillerkiller-api
+  labels:
+    cloud.googleapis.com/location: REGION
+  annotations:
+    # Allows the alpha bits some GMP-sidecar deployments still rely on; safe to
+    # drop to BETA/remove once your project shows these features as GA.
+    run.googleapis.com/launch-stage: ALPHA
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/execution-environment: gen2
+        # Start the collector only after the API is healthy; stop it last.
+        run.googleapis.com/container-dependencies: '{"collector":["app"]}'
+        # Keep CPU allocated between requests so the sidecar can flush metrics
+        # reliably (default throttling can drop samples). Costs more per up-instance
+        # — set to 'true' to trade some metric gaps for lower cost.
+        run.googleapis.com/cpu-throttling: 'false'
+        # Ceiling on instances (cost guard). The single-container --source deploy
+        # leaves this default; set it there too if you want them to match.
+        autoscaling.knative.dev/maxScale: '4'
+    spec:
+      # The runtime service account. Needs (in addition to its existing
+      # secretAccessor grants): roles/monitoring.metricWriter,
+      # roles/logging.logWriter, and secretAccessor on fk-run-monitoring.
+      serviceAccountName: fillerkiller-api@PROJECT_ID.iam.gserviceaccount.com
+      containers:
+        # --- API (ingress container) ----------------------------------------
+        - name: app
+          image: IMAGE
+          ports:
+            - name: http1
+              containerPort: 8080 # public ingress; $PORT is injected to match
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            failureThreshold: 10
+            periodSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            periodSeconds: 30
+          env:
+            # Metrics on a private loopback port the sidecar scrapes over localhost
+            # (sidecars share the instance network namespace). Not the ingress
+            # port, so it is never reachable from the internet.
+            - name: METRICS_ADDR
+              value: 127.0.0.1:9090
+            - name: CORS_ALLOWED_ORIGIN
+              value: https://DOMAIN
+            - name: AUTH_BASE_URL
+              value: https://DOMAIN
+            - name: WEB_POST_LOGIN_URL
+              value: https://DOMAIN
+            - name: AUTH_COOKIE_SECURE
+              value: 'true'
+            - name: GOOGLE_CLIENT_ID
+              value: GOOGLE_CLIENT_ID_VALUE
+            - name: GITHUB_CLIENT_ID
+              value: GITHUB_CLIENT_ID_VALUE
+            # Secrets live in Secret Manager (same secrets the flag-based deploy used).
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: fk-database-url
+                  key: latest
+            - name: AUTH_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: fk-jwt
+                  key: latest
+            - name: TMDB_API_READ_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: fk-tmdb
+                  key: latest
+            - name: GOOGLE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: fk-google
+                  key: latest
+            - name: GITHUB_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: fk-github
+                  key: latest
+          resources:
+            limits:
+              cpu: '1'
+              memory: 512Mi
+        # --- GMP collector sidecar ------------------------------------------
+        - name: collector
+          image: us-docker.pkg.dev/cloud-ops-agents-artifacts/cloud-run-gmp-sidecar/cloud-run-gmp-sidecar:1.2.0
+          volumeMounts:
+            - name: run-monitoring
+              mountPath: /etc/rungmp/
+          resources:
+            limits:
+              cpu: '0.5'
+              memory: 256Mi
+      volumes:
+        # The RunMonitoring scrape config (deploy/run-monitoring.yaml) →
+        # /etc/rungmp/config.yaml, where the collector reads it.
+        - name: run-monitoring
+          secret:
+            secretName: fk-run-monitoring
+            items:
+              - key: latest
+                path: config.yaml

@@ -191,12 +191,74 @@ gcloud run jobs deploy fillerkiller-recompute \
   e.g. a GitHub Action or a Cloud Run Job. This is what preserves data ownership
   independent of the vendor.
 
+### 5. App metrics (GMP collector sidecar) — optional
+
+The API exposes Prometheus RED + business metrics (`http_requests_total`,
+`http_request_duration_seconds`, `votes_total`, `show_imports_total`, …) on a
+**private** port (`METRICS_ADDR`, default `127.0.0.1:9090`) that Cloud Run never routes
+public traffic to. A **Google Managed Service for Prometheus (GMP) collector
+sidecar** scrapes it over the instance-local network and pushes to Managed
+Prometheus, where a Grafana instance can read it back through the Cloud Monitoring
+data source.
+
+This is push-based on purpose: scraping Cloud Run from outside is lossy because the
+service autoscales and cold-starts, so each external scrape would hit one random
+instance. The sidecar gives each instance its own series and Google aggregates them.
+
+Adding the sidecar makes the service **multi-container**, which can't be built with
+`--source`, so the flow becomes build-image → `services replace`:
+
+```bash
+# a. One-time: grant the runtime SA metric/log write + the scrape-config secret.
+for ROLE in roles/monitoring.metricWriter roles/logging.logWriter; do
+  gcloud projects add-iam-policy-binding $PROJECT \
+    --member=serviceAccount:$RUNTIME_SA --role=$ROLE
+done
+gcloud secrets create fk-run-monitoring --data-file=deploy/run-monitoring.yaml
+gcloud secrets add-iam-policy-binding fk-run-monitoring \
+  --member=serviceAccount:$RUNTIME_SA --role=roles/secretmanager.secretAccessor
+
+# b. Build + push the API image (Cloud Build, root Dockerfile = SPA + API).
+IMAGE=$REGION-docker.pkg.dev/$PROJECT/fillerkiller/fillerkiller-api:$(git rev-parse --short HEAD)
+gcloud builds submit --tag $IMAGE .
+
+# c. Fill placeholders in deploy/cloudrun-service.yaml and apply.
+sed -e "s/PROJECT_ID/$PROJECT/g" -e "s/REGION/$REGION/g" \
+    -e "s|IMAGE|$IMAGE|g" -e "s/DOMAIN/$DOMAIN/g" \
+    -e "s/GOOGLE_CLIENT_ID_VALUE/$GOOGLE_CLIENT_ID/g" \
+    -e "s/GITHUB_CLIENT_ID_VALUE/$GITHUB_CLIENT_ID/g" \
+    deploy/cloudrun-service.yaml | gcloud run services replace - --region $REGION
+```
+
+Notes:
+- `services replace` updates only the service **spec** — it does **not** set the
+  public invoker the way step 2's `--allow-unauthenticated` does. If you ran step 2
+  first, that binding persists. If the sidecar deploy is the service's first
+  creation, grant it once:
+  `gcloud run services add-iam-policy-binding fillerkiller-api --member=allUsers --role=roles/run.invoker --region $REGION`.
+- The `sed | replace` stream is throwaway (piped straight to gcloud); it also
+  rewrites the placeholder list in the file's header comments, which is harmless —
+  don't redirect it to a file expecting clean docs.
+- The sidecar image is Google's: `us-docker.pkg.dev/cloud-ops-agents-artifacts/cloud-run-gmp-sidecar/cloud-run-gmp-sidecar:1.2.0`.
+- `cpu-throttling: 'false'` (in the YAML) keeps the collector able to flush between
+  requests; it raises per-instance cost. Flip to `'true'` to save cost at the price
+  of some metric gaps. App metrics are naturally absent while the service is scaled
+  to zero — that's fine, there's no traffic to measure, and the **built-in Cloud Run
+  metrics** (request count, latency, instances, CPU/mem) keep flowing regardless.
+- Don't want metrics? Keep deploying with the single-container `--source` command in
+  step 2 (the private metrics port simply goes unscraped) and skip this section.
+
 ### Updating
 
 ```bash
 git pull
-# If the change added a migration, run step 1 (migrate job) first. Then redeploy
-# from the repo root — the root Dockerfile rebuilds the SPA + API into one image:
+# If the change added a migration, run step 1 (migrate job) first.
+#
+# Single-container (no metrics sidecar): redeploy from the repo root — the root
+# Dockerfile rebuilds the SPA + API into one image:
 gcloud run deploy fillerkiller-api --source . --region $REGION \
   --service-account=$RUNTIME_SA --build-service-account=$BUILD_SA
+
+# Multi-container (with the GMP sidecar): rebuild the image and re-apply the
+# service (steps 5b–5c above).
 ```

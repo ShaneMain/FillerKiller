@@ -31,6 +31,12 @@ dotenvy = "0.15"
 anyhow = "1"
 thiserror = "2"
 governor = "0.8"
+# App metrics: a Prometheus exposition served on a private, instance-local port
+# (scraped by the Cloud Run GMP collector sidecar / any internal Prometheus).
+# default-features=false drops the crate's own HTTP listener + push-gateway — we
+# render through our own Axum route instead.
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.16", default-features = false }
 
 [features]
 # DB-backed integration tests (sqlx::test). Off by default so `cargo test` stays
