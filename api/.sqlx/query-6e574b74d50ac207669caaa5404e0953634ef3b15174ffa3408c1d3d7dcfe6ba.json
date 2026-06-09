@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT e.episode_id, ep.season_number, ep.episode_number, ep.name,\n               e.disposition::text AS \"disposition!\"\n        FROM skip_guide_entry e\n        JOIN episode ep ON ep.id = e.episode_id\n        WHERE e.guide_id = $1\n        ORDER BY ep.season_number, ep.episode_number\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "episode_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "season_number",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "episode_number",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "disposition!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "6e574b74d50ac207669caaa5404e0953634ef3b15174ffa3408c1d3d7dcfe6ba"
+}

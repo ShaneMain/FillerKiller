@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM skip_guide_entry WHERE guide_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5d2f639ffb291334072fd39cdc44611e415c1e33e7ca4928435c02f754d872b9"
+}

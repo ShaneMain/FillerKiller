@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT author_id, show_id, is_published FROM skip_guide WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "author_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "show_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "is_published",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "d9bb74c83ec65509bd207065ffc6f48da022065c0c482b4354f042939ba33765"
+}

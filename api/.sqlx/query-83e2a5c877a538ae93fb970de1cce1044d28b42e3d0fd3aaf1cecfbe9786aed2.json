@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            g.id,\n            g.show_id,\n            s.slug AS show_slug,\n            s.name AS show_name,\n            g.title,\n            g.description,\n            g.is_published,\n            g.like_count::bigint AS \"like_count!\",\n            u.display_name AS author_name,\n            EXISTS(SELECT 1 FROM skip_guide_like l WHERE l.guide_id = g.id AND l.user_id = $2) AS \"my_like!\",\n            COALESCE(g.author_id = $2, FALSE) AS \"mine!\"\n        FROM skip_guide g\n        JOIN show s ON s.id = g.show_id\n        LEFT JOIN app_user u ON u.id = g.author_id\n        WHERE g.id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "show_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "show_slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "show_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "is_published",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
+        "name": "like_count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "author_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "my_like!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "mine!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      null,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "83e2a5c877a538ae93fb970de1cce1044d28b42e3d0fd3aaf1cecfbe9786aed2"
+}

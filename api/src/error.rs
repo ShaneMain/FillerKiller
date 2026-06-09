@@ -14,6 +14,8 @@ pub enum AppError {
     BadRequest(String),
     /// Missing or invalid session.
     Unauthorized,
+    /// Authenticated, but not allowed to act on this resource.
+    Forbidden,
     /// Client exceeded the vote rate limit.
     RateLimited,
     /// Upstream (TMDB) failure.
@@ -33,6 +35,11 @@ impl AppError {
                 StatusCode::UNAUTHORIZED,
                 "unauthorized",
                 "authentication required".to_string(),
+            ),
+            AppError::Forbidden => (
+                StatusCode::FORBIDDEN,
+                "forbidden",
+                "you don't have permission to do that".to_string(),
             ),
             AppError::RateLimited => (
                 StatusCode::TOO_MANY_REQUESTS,

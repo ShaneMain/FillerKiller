@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO skip_guide_entry (guide_id, episode_id, disposition)\n        SELECT $1, ep, disp::guide_disposition\n        FROM UNNEST($2::uuid[], $3::text[]) AS t(ep, disp)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b75b86c6643cc21e547dae3277fb6938d90343f12d614333bf89dff956e67773"
+}

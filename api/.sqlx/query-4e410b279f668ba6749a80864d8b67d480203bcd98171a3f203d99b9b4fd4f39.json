@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE skip_guide\n        SET title = $2, description = $3, is_published = $4, updated_at = now()\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4e410b279f668ba6749a80864d8b67d480203bcd98171a3f203d99b9b4fd4f39"
+}

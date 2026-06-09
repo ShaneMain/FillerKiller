@@ -7,6 +7,7 @@ mod auth;
 mod config;
 mod db;
 mod error;
+mod guides;
 mod import;
 mod models;
 mod oauth;
@@ -169,6 +170,15 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/shows/{id}", get(get_show))
         .route("/api/shows/{id}/episodes", get(get_show_episodes))
         .route("/api/shows/{id}/skip-guide", get(get_skip_guide))
+        .route("/api/shows/{id}/guides", get(list_guides).post(post_guide))
+        .route(
+            "/api/guides/{id}",
+            get(get_guide_detail).put(put_guide).delete(delete_guide_handler),
+        )
+        .route(
+            "/api/guides/{id}/like",
+            put(like_guide_handler).delete(unlike_guide_handler),
+        )
         .merge(vote_routes)
         .route("/api/auth/{provider}/login", get(oauth_login))
         .route("/api/auth/{provider}/callback", get(oauth_callback))
@@ -630,6 +640,115 @@ async fn delete_vote(
     db::delete_vote(&state.pool, user.id, episode_id).await?;
     let resp = vote_response(&state, episode_id, None).await?;
     Ok(private_json(&resp))
+}
+
+// ---- User-authored skip guides ----------------------------------------------
+
+/// `GET /api/shows/{id}/guides` — published user guides for a show, most-liked
+/// first. Carries the viewer's like/ownership flags when signed in.
+async fn list_guides(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    OptionalUser(user): OptionalUser,
+) -> Result<Response, AppError> {
+    let show_id = import::resolve_show_id(&state, &id).await?;
+    let list = guides::list_published(&state.pool, show_id, user.as_ref().map(|u| u.id)).await?;
+    Ok(match user {
+        Some(_) => private_json(&list),
+        None => cacheable_json(&list, TTL_AGGREGATE),
+    })
+}
+
+/// `POST /api/shows/{id}/guides` — create a guide for a show. Auth required.
+async fn post_guide(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    user: CurrentUser,
+    body: Result<Json<guides::GuideInput>, axum::extract::rejection::JsonRejection>,
+) -> Result<Response, AppError> {
+    rate_limit::check_user(&state.user_rate_limiter, user.id)?;
+    let Json(input) = body.map_err(|e| AppError::BadRequest(e.body_text()))?;
+    let show_id = import::resolve_show_id(&state, &id).await?;
+    let guide_id = guides::create_guide(&state.pool, show_id, user.id, &input).await?;
+    Ok((StatusCode::CREATED, Json(json!({ "id": guide_id }))).into_response())
+}
+
+/// `GET /api/guides/{id}` — full guide detail. Drafts are visible only to their author.
+async fn get_guide_detail(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    OptionalUser(user): OptionalUser,
+) -> Result<Response, AppError> {
+    let guide = guides::get_guide(&state.pool, id, user.as_ref().map(|u| u.id))
+        .await?
+        .filter(|g| g.is_published || g.mine)
+        .ok_or_else(|| AppError::NotFound("guide not found".into()))?;
+    Ok(match user {
+        Some(_) => private_json(&guide),
+        None => cacheable_json(&guide, TTL_AGGREGATE),
+    })
+}
+
+/// `PUT /api/guides/{id}` — update a guide (author only).
+async fn put_guide(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    user: CurrentUser,
+    body: Result<Json<guides::GuideInput>, axum::extract::rejection::JsonRejection>,
+) -> Result<Response, AppError> {
+    rate_limit::check_user(&state.user_rate_limiter, user.id)?;
+    let Json(input) = body.map_err(|e| AppError::BadRequest(e.body_text()))?;
+    guides::update_guide(&state.pool, id, user.id, &input).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// `DELETE /api/guides/{id}` — delete a guide (author only).
+async fn delete_guide_handler(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    user: CurrentUser,
+) -> Result<Response, AppError> {
+    guides::delete_guide(&state.pool, id, user.id).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// `PUT /api/guides/{id}/like` — like a guide. Auth required.
+async fn like_guide_handler(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    user: CurrentUser,
+) -> Result<Response, AppError> {
+    rate_limit::check_user(&state.user_rate_limiter, user.id)?;
+    guide_must_be_visible(&state, id, user.id).await?;
+    let count = guides::like_guide(&state.pool, id, user.id).await?;
+    Ok(private_json(&json!({ "likeCount": count, "myLike": true })))
+}
+
+/// `DELETE /api/guides/{id}/like` — remove a like. Auth required.
+async fn unlike_guide_handler(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    user: CurrentUser,
+) -> Result<Response, AppError> {
+    rate_limit::check_user(&state.user_rate_limiter, user.id)?;
+    let count = guides::unlike_guide(&state.pool, id, user.id).await?;
+    Ok(private_json(&json!({ "likeCount": count, "myLike": false })))
+}
+
+/// A guide is likeable only if it exists and is visible to the user (published,
+/// or their own draft) — so a hidden draft can't be probed via the like endpoint.
+async fn guide_must_be_visible(
+    state: &AppState,
+    guide_id: Uuid,
+    user_id: Uuid,
+) -> Result<(), AppError> {
+    let meta = guides::guide_meta(&state.pool, guide_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("guide not found".into()))?;
+    if !meta.is_published && meta.author_id != Some(user_id) {
+        return Err(AppError::NotFound("guide not found".into()));
+    }
+    Ok(())
 }
 
 // ---- Auth (OAuth -> stateless JWT in an httpOnly cookie) --------------------
