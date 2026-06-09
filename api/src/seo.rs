@@ -193,7 +193,7 @@ pub fn skip_guide_page(template: &str, base: &str, core: &ShowCore, guide: &Skip
 /// Render a user-authored guide's share page: per-guide SEO head + the curated
 /// watch/optional/skip lists as crawlable content. Caller passes only published
 /// guides.
-pub fn guide_page(template: &str, base: &str, guide: &GuideDetail) -> String {
+pub fn guide_page(template: &str, base: &str, guide: &GuideDetail, image: Option<String>) -> String {
     let base = base.trim_end_matches('/');
     let canonical = format!("{base}/shows/{}/guides/{}", guide.show_slug, guide.id);
     let count = |d: Disposition| guide.entries.iter().filter(|e| e.disposition == d).count();
@@ -206,7 +206,8 @@ pub fn guide_page(template: &str, base: &str, guide: &GuideDetail) -> String {
         title: format!("{} — {} skip guide — {SITE}", guide.title, guide.show_name),
         description,
         canonical,
-        image: Some(format!("{base}/og-image.png")),
+        // The show poster, falling back to the site card.
+        image: image.or_else(|| Some(format!("{base}/og-image.png"))),
     });
 
     let mut body = String::new();
@@ -337,6 +338,7 @@ mod tests {
             show_id: Uuid::nil(),
             show_slug: "breaking-bad".into(),
             show_name: "Breaking Bad".into(),
+            poster_path: None,
             title: "Story only <x>".into(),
             description: Some("Just the essentials".into()),
             author_name: Some("Ann".into()),
@@ -350,7 +352,7 @@ mod tests {
             ],
         };
         let tmpl = "<head><!--head--><title>D</title><!--/head--></head><body><div id=\"root\"></div></body>";
-        let out = guide_page(tmpl, "https://fillerkiller.app", &guide);
+        let out = guide_page(tmpl, "https://fillerkiller.app", &guide, None);
         assert!(out.contains("Story only &lt;x&gt; — Breaking Bad skip guide"), "{out}");
         assert!(out.contains("/shows/breaking-bad/guides/00000000-0000-0000-0000-000000000000"));
         assert!(out.contains("<h2>Watch (1)</h2>"));

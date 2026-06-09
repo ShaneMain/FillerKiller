@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { deleteGuide, getGuide, type GuideDetail, type GuideEntry } from "../lib/api";
+import { deleteGuide, getGuide, imageUrl, type GuideDetail, type GuideEntry } from "../lib/api";
 import { DISPOSITION_META } from "../lib/guides";
 import { useAuth } from "../lib/auth";
 import { usePageMeta } from "../lib/meta";
@@ -73,14 +73,24 @@ export function GuideDetailPage() {
       </Link>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-bold">{guide.title}</h1>
-          <p className="mt-1 text-sm text-zinc-500">
-            by {guide.authorName ?? "a former member"}
-            {!guide.isPublished && (
-              <span className="ml-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-xs text-amber-300">Draft</span>
-            )}
-          </p>
+        <div className="flex min-w-0 gap-3">
+          {imageUrl(guide.posterPath, "w154") && (
+            <img
+              src={imageUrl(guide.posterPath, "w154")!}
+              alt={`${guide.showName} poster`}
+              className="h-20 w-14 shrink-0 rounded object-cover"
+            />
+          )}
+          <div className="min-w-0">
+            <h1 className="text-2xl font-bold">{guide.title}</h1>
+            <p className="mt-1 text-sm text-zinc-500">
+              <span className="text-zinc-400">{guide.showName}</span> · by{" "}
+              {guide.authorName ?? "a former member"}
+              {!guide.isPublished && (
+                <span className="ml-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-xs text-amber-300">Draft</span>
+              )}
+            </p>
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <LikeButton

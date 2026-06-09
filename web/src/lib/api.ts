@@ -114,6 +114,7 @@ export interface GuideDetail {
   showId: string;
   showSlug: string;
   showName: string;
+  posterPath: string | null;
   title: string;
   description: string | null;
   authorName: string | null;

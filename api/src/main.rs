@@ -576,7 +576,8 @@ async fn guide_html(
     let html = match Uuid::parse_str(&guide_id) {
         Ok(gid) => match guides::get_guide(&state.pool, gid, None).await {
             Ok(Some(guide)) if guide.is_published => {
-                seo::guide_page(&template, &state.auth.base_url, &guide)
+                let image = state.tmdb.image_url(guide.poster_path.as_deref(), "w500");
+                seo::guide_page(&template, &state.auth.base_url, &guide, image)
             }
             _ => template.as_str().to_string(),
         },
