@@ -117,6 +117,14 @@ export function ShowPage() {
         )}
         <div className="min-w-0">
           <h1 className="text-2xl font-bold">{show.name}</h1>
+          {show.tmdbRating != null && show.tmdbVoteCount != null && show.tmdbVoteCount > 0 && (
+            <p
+              className="mt-1 text-sm text-amber-300"
+              title={`TMDB rating ${show.tmdbRating.toFixed(1)}/10 from ${show.tmdbVoteCount.toLocaleString()} votes`}
+            >
+              ★ {show.tmdbRating.toFixed(1)} <span className="text-zinc-500">on TMDB</span>
+            </p>
+          )}
           {show.overview && <p className="mt-2 text-sm text-zinc-400 line-clamp-4">{show.overview}</p>}
         </div>
       </div>

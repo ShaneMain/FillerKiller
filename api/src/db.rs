@@ -17,6 +17,8 @@ pub struct ShowCore {
     pub slug: String,
     pub overview: Option<String>,
     pub poster_path: Option<String>,
+    pub tmdb_vote_average: Option<f64>,
+    pub tmdb_vote_count: Option<i32>,
 }
 
 /// A show imported from TMDB, keyed by tmdb id in search results.
@@ -109,6 +111,14 @@ pub async fn all_show_slugs(pool: &PgPool) -> Result<Vec<String>, sqlx::Error> {
     Ok(slugs)
 }
 
+/// Every show's TMDB id, for the `refresh-catalog` backfill.
+pub async fn all_show_tmdb_ids(pool: &PgPool) -> Result<Vec<i64>, sqlx::Error> {
+    let ids = sqlx::query_scalar!("SELECT tmdb_id FROM show ORDER BY tmdb_id")
+        .fetch_all(pool)
+        .await?;
+    Ok(ids)
+}
+
 /// Map a set of TMDB ids to the ones we already have imported.
 pub async fn imported_show_ids(
     pool: &PgPool,
@@ -129,7 +139,9 @@ pub async fn imported_show_ids(
 pub async fn find_show_core(pool: &PgPool, id: Uuid) -> Result<Option<ShowCore>, sqlx::Error> {
     let row = sqlx::query_as!(
         ShowCore,
-        "SELECT id, tmdb_id, name, slug, overview, poster_path FROM show WHERE id = $1",
+        "SELECT id, tmdb_id, name, slug, overview, poster_path, \
+                tmdb_vote_average, tmdb_vote_count \
+         FROM show WHERE id = $1",
         id
     )
     .fetch_optional(pool)
@@ -137,6 +149,7 @@ pub async fn find_show_core(pool: &PgPool, id: Uuid) -> Result<Option<ShowCore>,
     Ok(row)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn upsert_show(
     executor: impl sqlx::PgExecutor<'_>,
     tmdb_id: i64,
@@ -145,18 +158,25 @@ pub async fn upsert_show(
     first_air_year: Option<i32>,
     poster_path: Option<&str>,
     overview: Option<&str>,
+    tmdb_vote_average: Option<f64>,
+    tmdb_vote_count: Option<i32>,
 ) -> Result<Uuid, sqlx::Error> {
     // The slug is set only on insert; a re-import (rename) keeps the original
     // slug so existing links stay valid.
     let id = sqlx::query_scalar!(
         r#"
-        INSERT INTO show (tmdb_id, name, slug, first_air_year, poster_path, overview, last_synced_at)
-        VALUES ($1, $2, $3, $4, $5, $6, now())
+        INSERT INTO show (
+            tmdb_id, name, slug, first_air_year, poster_path, overview,
+            tmdb_vote_average, tmdb_vote_count, last_synced_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
         ON CONFLICT (tmdb_id) DO UPDATE SET
             name = EXCLUDED.name,
             first_air_year = EXCLUDED.first_air_year,
             poster_path = EXCLUDED.poster_path,
             overview = EXCLUDED.overview,
+            tmdb_vote_average = EXCLUDED.tmdb_vote_average,
+            tmdb_vote_count = EXCLUDED.tmdb_vote_count,
             last_synced_at = now()
         RETURNING id
         "#,
@@ -166,6 +186,8 @@ pub async fn upsert_show(
         first_air_year,
         poster_path,
         overview,
+        tmdb_vote_average,
+        tmdb_vote_count,
     )
     .fetch_one(executor)
     .await?;
@@ -580,9 +602,11 @@ mod tests {
     #[cfg(feature = "integration")]
     #[sqlx::test]
     async fn episode_score_trigger_and_anonymize(pool: sqlx::PgPool) {
-        let show = upsert_show(&pool, 9001, "Trigger Test", "trigger-test", Some(2020), None, None)
-            .await
-            .unwrap();
+        let show = upsert_show(
+            &pool, 9001, "Trigger Test", "trigger-test", Some(2020), None, None, None, None,
+        )
+        .await
+        .unwrap();
         let season = upsert_season(&pool, show, 1, Some("Season 1")).await.unwrap();
         upsert_episode(
             &pool, show, season, 8001, 1, 1, Some("Ep 1"), None, None, None, None, None,

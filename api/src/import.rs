@@ -3,10 +3,12 @@
 //! catalog source of truth; we only cache it.
 
 use chrono::NaiveDate;
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::db;
 use crate::error::AppError;
+use crate::tmdb::TmdbClient;
 use crate::AppState;
 
 /// Resolve a show path param to our internal id.
@@ -52,17 +54,24 @@ pub async fn ensure_show_imported(state: &AppState, tmdb_id: i64) -> Result<Uuid
     // season). This path is unauthenticated, so bound how often it can run per
     // instance — already-imported shows short-circuit above and never hit this.
     crate::rate_limit::check_import(&state.import_limiter)?;
+    import_show(&state.tmdb, &state.pool, tmdb_id).await
+}
 
-    // 1. Fetch everything from TMDB up front.
-    let detail = state.tmdb.get_show(tmdb_id).await?;
+/// Fetch a show (series + seasons + episodes, with TMDB ratings) and upsert it.
+/// Used both for first-time import and the `refresh-catalog` backfill, so it has
+/// no "already imported" guard or rate limit of its own. All TMDB fetches happen
+/// up front; the DB write is one transaction that never spans network I/O, so a
+/// mid-import failure leaves no partial state. A re-import preserves the slug and
+/// the opinion layer (votes/scores are never touched here).
+pub async fn import_show(tmdb: &TmdbClient, pool: &PgPool, tmdb_id: i64) -> Result<Uuid, AppError> {
+    let detail = tmdb.get_show(tmdb_id).await?;
     let mut seasons = Vec::with_capacity(detail.seasons.len());
     for season in &detail.seasons {
-        let full = state.tmdb.get_season(tmdb_id, season.season_number).await?;
+        let full = tmdb.get_season(tmdb_id, season.season_number).await?;
         seasons.push((season, full));
     }
 
-    // 2. Write atomically — rolls back as a whole if anything fails.
-    let mut tx = state.pool.begin().await?;
+    let mut tx = pool.begin().await?;
     let slug = db::pick_unique_slug(&mut tx, &detail.name, detail.id).await?;
     let show_id = db::upsert_show(
         &mut *tx,
@@ -72,6 +81,8 @@ pub async fn ensure_show_imported(state: &AppState, tmdb_id: i64) -> Result<Uuid
         detail.first_air_date.as_deref().and_then(parse_year),
         detail.poster_path.as_deref(),
         detail.overview.as_deref(),
+        detail.vote_average,
+        detail.vote_count,
     )
     .await?;
 

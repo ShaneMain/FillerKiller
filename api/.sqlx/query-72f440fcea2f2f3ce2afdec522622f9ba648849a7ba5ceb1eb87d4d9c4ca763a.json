@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO show (\n            tmdb_id, name, slug, first_air_year, poster_path, overview,\n            tmdb_vote_average, tmdb_vote_count, last_synced_at\n        )\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())\n        ON CONFLICT (tmdb_id) DO UPDATE SET\n            name = EXCLUDED.name,\n            first_air_year = EXCLUDED.first_air_year,\n            poster_path = EXCLUDED.poster_path,\n            overview = EXCLUDED.overview,\n            tmdb_vote_average = EXCLUDED.tmdb_vote_average,\n            tmdb_vote_count = EXCLUDED.tmdb_vote_count,\n            last_synced_at = now()\n        RETURNING id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Int4",
+        "Text",
+        "Text",
+        "Float8",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "72f440fcea2f2f3ce2afdec522622f9ba648849a7ba5ceb1eb87d4d9c4ca763a"
+}

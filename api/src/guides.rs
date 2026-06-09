@@ -549,9 +549,11 @@ mod tests {
 
     #[sqlx::test]
     async fn create_like_publish_cap_and_anonymize(pool: sqlx::PgPool) {
-        let show = db::upsert_show(&pool, 9100, "Guide Test", "guide-test", Some(2020), None, None)
-            .await
-            .unwrap();
+        let show = db::upsert_show(
+            &pool, 9100, "Guide Test", "guide-test", Some(2020), None, None, None, None,
+        )
+        .await
+        .unwrap();
         let season = db::upsert_season(&pool, show, 1, Some("S1")).await.unwrap();
         for n in 1i32..=3 {
             db::upsert_episode(

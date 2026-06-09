@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, tmdb_id, name, slug, overview, poster_path FROM show WHERE id = $1",
+  "query": "SELECT id, tmdb_id, name, slug, overview, poster_path, tmdb_vote_average, tmdb_vote_count FROM show WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -32,6 +32,16 @@
         "ordinal": 5,
         "name": "poster_path",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "tmdb_vote_average",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 7,
+        "name": "tmdb_vote_count",
+        "type_info": "Int4"
       }
     ],
     "parameters": {
@@ -45,8 +55,10 @@
       false,
       false,
       true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "91abee68fab3272195fc0d3db4ec0734f846ecf65749a9e194955bd5ee9d4cc5"
+  "hash": "2a72f1ddc934131f7bcffcbeeac41288e5abc76a8c0001f5b525e77009af9012"
 }

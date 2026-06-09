@@ -81,8 +81,9 @@ async fn main() -> anyhow::Result<()> {
     match std::env::args().nth(1).as_deref() {
         Some("migrate") => return run_migrate(&config).await,
         Some("recompute-scores") => return run_recompute_scores(&config).await,
+        Some("refresh-catalog") => return run_refresh_catalog(&config).await,
         Some(other) => anyhow::bail!(
-            "unknown subcommand {other:?}; expected `migrate` or `recompute-scores`"
+            "unknown subcommand {other:?}; expected `migrate`, `recompute-scores`, or `refresh-catalog`"
         ),
         None => {}
     }
@@ -262,6 +263,38 @@ async fn run_recompute_scores(config: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `refresh-catalog` subcommand: re-import every show from TMDB to backfill cached
+/// fields (e.g. TMDB ratings) on shows imported before those fields existed.
+/// Best-effort — logs and continues past per-show failures. Preserves slugs and
+/// never touches the vote/score layer. Run as a one-off ops step.
+async fn run_refresh_catalog(config: &Config) -> anyhow::Result<()> {
+    let pool = connect_pool(config).await?;
+    let http = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(15))
+        .build()?;
+    let tmdb = TmdbClient::new(
+        http,
+        config.tmdb_token.clone(),
+        config.tmdb_image_base_url.clone(),
+    );
+    let ids = db::all_show_tmdb_ids(&pool).await?;
+    let total = ids.len();
+    tracing::info!("refreshing {total} shows from TMDB");
+    let mut ok = 0usize;
+    for (i, id) in ids.iter().enumerate() {
+        match import::import_show(&tmdb, &pool, *id).await {
+            Ok(_) => ok += 1,
+            Err(e) => tracing::warn!("refresh show tmdb:{id} failed: {e:?}"),
+        }
+        if (i + 1) % 25 == 0 || i + 1 == total {
+            tracing::info!("refreshed {}/{}", i + 1, total);
+        }
+    }
+    tracing::info!("catalog refresh done: {ok}/{total} shows updated");
+    Ok(())
+}
+
 fn build_cors(origin: &str) -> CorsLayer {
     use axum::http::{HeaderValue, Method};
     match origin.parse::<HeaderValue>() {
@@ -420,6 +453,8 @@ async fn get_show(
         slug: core.slug,
         overview: core.overview,
         poster_path: core.poster_path,
+        tmdb_rating: core.tmdb_vote_average,
+        tmdb_vote_count: core.tmdb_vote_count,
         seasons,
     };
     Ok(cacheable_json(&detail, TTL_CATALOG))

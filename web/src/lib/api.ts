@@ -34,6 +34,9 @@ export interface ShowDetail {
   slug: string;
   overview: string | null;
   posterPath: string | null;
+  /** TMDB's overall show rating (0–10) and vote count; null until imported. */
+  tmdbRating: number | null;
+  tmdbVoteCount: number | null;
   seasons: SeasonSummary[];
 }
 

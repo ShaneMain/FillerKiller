@@ -125,6 +125,8 @@ pub struct TmdbShowDetail {
     pub overview: Option<String>,
     pub poster_path: Option<String>,
     pub first_air_date: Option<String>,
+    pub vote_average: Option<f64>,
+    pub vote_count: Option<i32>,
     pub seasons: Vec<TmdbSeasonSummary>,
 }
 

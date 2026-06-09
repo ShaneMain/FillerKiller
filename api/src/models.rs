@@ -46,6 +46,9 @@ pub struct ShowDetail {
     pub slug: String,
     pub overview: Option<String>,
     pub poster_path: Option<String>,
+    /// TMDB's overall show rating (0–10) and the vote count behind it.
+    pub tmdb_rating: Option<f64>,
+    pub tmdb_vote_count: Option<i32>,
     pub seasons: Vec<SeasonSummary>,
 }
 
