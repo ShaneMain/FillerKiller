@@ -183,7 +183,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/auth/{provider}/login", get(oauth_login))
         .route("/api/auth/{provider}/callback", get(oauth_callback))
         .route("/api/auth/logout", post(logout))
-        .route("/api/me", get(me).delete(delete_me))
+        .route("/api/me", get(me).put(update_me).delete(delete_me))
+        .route("/api/me/guides", get(my_guides))
         // Unknown /api paths return our JSON 404 (not the SPA shell), so a
         // mistyped/removed endpoint can't return 200 HTML and break the client's
         // JSON parsing. Specific routes above take precedence over this catch-all.
@@ -776,10 +777,31 @@ async fn guide_must_be_visible(
 
 // ---- Auth (OAuth -> stateless JWT in an httpOnly cookie) --------------------
 
-/// `GET /api/auth/{provider}/login` — redirect to the provider with a CSRF state.
+#[derive(Debug, Deserialize)]
+struct LoginParams {
+    /// Where to send the user after login — a site-relative path (e.g. the page
+    /// they came from). Validated by `safe_next` to prevent an open redirect.
+    next: Option<String>,
+}
+
+/// Validate a post-login `next` target: it must be a site-relative path (a single
+/// leading `/`, not protocol-relative `//`, no backslashes or control chars), so
+/// it can only ever redirect within our own origin. Otherwise `None`.
+fn safe_next(next: &str) -> Option<String> {
+    let ok = next.starts_with('/')
+        && !next.starts_with("//")
+        && !next.contains('\\')
+        && !next.contains(['\n', '\r', '\t'])
+        && next.len() <= 512;
+    ok.then(|| next.to_string())
+}
+
+/// `GET /api/auth/{provider}/login` — redirect to the provider with a CSRF state,
+/// remembering an optional `?next=` return path for after login.
 async fn oauth_login(
     State(state): State<AppState>,
     Path(provider): Path<String>,
+    Query(params): Query<LoginParams>,
     jar: CookieJar,
 ) -> Result<Response, AppError> {
     let p = state
@@ -796,7 +818,10 @@ async fn oauth_login(
     let redirect_uri = format!("{}/api/auth/{}/callback", state.auth.base_url, provider);
     let url = p.authorize_url(&redirect_uri, &csrf);
 
-    let jar = jar.add(auth::state_cookie(csrf, state.auth.cookie_secure));
+    let mut jar = jar.add(auth::state_cookie(csrf, state.auth.cookie_secure));
+    if let Some(next) = params.next.as_deref().and_then(safe_next) {
+        jar = jar.add(auth::next_cookie(next, state.auth.cookie_secure));
+    }
     Ok((jar, Redirect::to(&url)).into_response())
 }
 
@@ -826,7 +851,7 @@ async fn oauth_callback(
     // (the real reason is logged, not reflected, to avoid URL injection).
     if let Some(err) = params.error.as_deref() {
         tracing::info!("oauth callback error from {provider}: {err}");
-        let jar = jar.remove(auth::STATE_COOKIE);
+        let jar = jar.remove(auth::STATE_COOKIE).remove(auth::NEXT_COOKIE);
         let url = format!("{}?auth_error=signin_failed", state.auth.web_post_login_url);
         return Ok((jar, Redirect::to(&url)).into_response());
     }
@@ -858,7 +883,9 @@ async fn oauth_callback(
         let user = p.fetch_user(&state.http, &access_token).await?;
         let user_id =
             db::upsert_user_by_email(&state.pool, &user.email, user.name.as_deref()).await?;
-        auth::issue_jwt(&state.auth.jwt_secret, user_id, &user.email, user.name.as_deref())
+        // Honour a previously-set screen name over the OAuth profile name.
+        let display = db::effective_display_name(&state.pool, user_id).await?;
+        auth::issue_jwt(&state.auth.jwt_secret, user_id, &user.email, display.as_deref())
     }
     .await;
 
@@ -866,16 +893,66 @@ async fn oauth_callback(
         Ok(token) => token,
         Err(e) => {
             tracing::warn!("oauth callback failed for {provider}: {e:?}");
-            let jar = jar.remove(auth::STATE_COOKIE);
+            let jar = jar.remove(auth::STATE_COOKIE).remove(auth::NEXT_COOKIE);
             let url = format!("{}?auth_error=signin_failed", state.auth.web_post_login_url);
             return Ok((jar, Redirect::to(&url)).into_response());
         }
     };
 
+    // Return the user to where they started (the validated `next` cookie), else home.
+    let dest = match jar.get(auth::NEXT_COOKIE).and_then(|c| safe_next(c.value())) {
+        Some(path) => format!("{}{}", state.auth.web_post_login_url.trim_end_matches('/'), path),
+        None => state.auth.web_post_login_url.clone(),
+    };
     let jar = jar
         .remove(auth::STATE_COOKIE)
+        .remove(auth::NEXT_COOKIE)
         .add(auth::session_cookie(token, state.auth.cookie_secure));
-    Ok((jar, Redirect::to(&state.auth.web_post_login_url)).into_response())
+    Ok((jar, Redirect::to(&dest)).into_response())
+}
+
+/// `GET /api/me/guides` — the caller's own guides (published + drafts). Auth required.
+async fn my_guides(State(state): State<AppState>, user: CurrentUser) -> Result<Response, AppError> {
+    let list = guides::list_by_author(&state.pool, user.id).await?;
+    Ok(private_json(&list))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateMeBody {
+    /// New screen name; trimmed, blank clears it (revert to the OAuth name).
+    screen_name: Option<String>,
+}
+
+/// `PUT /api/me` — update the caller's profile (screen name). Re-issues the
+/// session cookie so the new display name takes effect immediately. Auth required.
+async fn update_me(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    jar: CookieJar,
+    body: Result<Json<UpdateMeBody>, axum::extract::rejection::JsonRejection>,
+) -> Result<Response, AppError> {
+    let Json(body) = body.map_err(|e| AppError::BadRequest(e.body_text()))?;
+    let screen = body
+        .screen_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if let Some(s) = screen {
+        if s.chars().count() > 40 {
+            return Err(AppError::BadRequest(
+                "screen name must be at most 40 characters".into(),
+            ));
+        }
+    }
+    let display = db::set_screen_name(&state.pool, user.id, screen).await?;
+    let token = auth::issue_jwt(&state.auth.jwt_secret, user.id, &user.email, display.as_deref())?;
+    let jar = jar.add(auth::session_cookie(token, state.auth.cookie_secure));
+    Ok((
+        jar,
+        private_json(&json!({ "id": user.id, "email": user.email, "displayName": display })),
+    )
+        .into_response())
 }
 
 /// `GET /api/me` — current user, decoded from the cookie (no DB read).
@@ -903,4 +980,31 @@ async fn delete_me(
 async fn logout(State(state): State<AppState>, jar: CookieJar) -> impl IntoResponse {
     let jar = jar.add(auth::clear_session_cookie(state.auth.cookie_secure));
     (jar, StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_me_body_accepts_camelcase_screen_name() {
+        // Crosses the actual wire contract: the SPA sends `screenName`.
+        let set: UpdateMeBody = serde_json::from_str(r#"{"screenName":"Ann"}"#).unwrap();
+        assert_eq!(set.screen_name.as_deref(), Some("Ann"));
+        let cleared: UpdateMeBody = serde_json::from_str(r#"{"screenName":null}"#).unwrap();
+        assert_eq!(cleared.screen_name, None);
+    }
+
+    #[test]
+    fn safe_next_allows_relative_and_blocks_offsite() {
+        assert_eq!(safe_next("/shows/24").as_deref(), Some("/shows/24"));
+        assert_eq!(safe_next("/account?tab=guides").as_deref(), Some("/account?tab=guides"));
+        // Off-site / protocol-relative / scheme / control-char / non-relative are rejected.
+        assert!(safe_next("//evil.example").is_none());
+        assert!(safe_next("https://evil.example").is_none());
+        assert!(safe_next("/a\\b").is_none());
+        assert!(safe_next("/a\nb").is_none());
+        assert!(safe_next("not-relative").is_none());
+        assert!(safe_next("").is_none());
+    }
 }

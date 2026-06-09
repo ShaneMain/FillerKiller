@@ -11,6 +11,7 @@ import {
 } from "../lib/api";
 import { DISPOSITIONS, DISPOSITION_META, statusToDisposition } from "../lib/guides";
 import { useAuth } from "../lib/auth";
+import { useLoginHref } from "../lib/loginNav";
 import { usePageMeta } from "../lib/meta";
 
 const MAX_TITLE = 80;
@@ -21,6 +22,7 @@ export function GuideEditorPage() {
   const editing = !!guideId;
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
+  const loginHref = useLoginHref();
   usePageMeta(editing ? "Edit skip guide" : "Create a skip guide");
 
   const [showName, setShowName] = useState<string>("");
@@ -101,8 +103,8 @@ export function GuideEditorPage() {
       <div className="mx-auto max-w-sm px-4 py-12">
         <h1 className="text-2xl font-bold">Create a skip guide</h1>
         <p className="mt-3 text-zinc-400">
-          <Link to="/login" className="text-rose-400 hover:text-rose-300">Sign in</Link> to build
-          and share your own skip guide.
+          <Link to={loginHref} className="text-rose-400 hover:text-rose-300">Sign in</Link> to
+          build and share your own skip guide.
         </p>
       </div>
     );

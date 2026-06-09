@@ -269,6 +269,41 @@ pub async fn upsert_user_by_email(
     Ok(id)
 }
 
+/// The effective display name for a user: their chosen screen name, else the
+/// OAuth-provided name (None if neither is set).
+pub async fn effective_display_name(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<Option<String>, sqlx::Error> {
+    let name = sqlx::query_scalar!(
+        "SELECT COALESCE(screen_name, display_name) FROM app_user WHERE id = $1",
+        user_id
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(name)
+}
+
+/// Set (or clear, when `None`) a user's screen name. Returns the new effective
+/// display name (the screen name, or the OAuth name when cleared).
+pub async fn set_screen_name(
+    pool: &PgPool,
+    user_id: Uuid,
+    screen_name: Option<&str>,
+) -> Result<Option<String>, sqlx::Error> {
+    let name = sqlx::query_scalar!(
+        r#"
+        UPDATE app_user SET screen_name = $2 WHERE id = $1
+        RETURNING COALESCE(screen_name, display_name)
+        "#,
+        user_id,
+        screen_name,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(name)
+}
+
 /// Permanently delete a user account. Votes are retained anonymously (the
 /// `vote.user_id` FK is `ON DELETE SET NULL`, so `episode_score` is unaffected),
 /// but the user's authored skip guides ARE removed (that FK is `ON DELETE

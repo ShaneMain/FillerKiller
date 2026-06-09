@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { likeGuide, unlikeGuide } from "../lib/api";
+import { useLoginHref } from "../lib/loginNav";
 
 /**
  * Heart toggle for a published guide. Signed-out users see a link to sign in.
@@ -19,11 +20,12 @@ export function LikeButton({
   const [count, setCount] = useState(initialCount);
   const [liked, setLiked] = useState(initialLiked);
   const [busy, setBusy] = useState(false);
+  const loginHref = useLoginHref();
 
   if (!signedIn) {
     return (
       <Link
-        to="/login"
+        to={loginHref}
         title="Sign in to like"
         className="inline-flex items-center gap-1 rounded-md border border-zinc-700 px-2.5 py-1 text-sm text-zinc-400 hover:bg-zinc-800"
       >

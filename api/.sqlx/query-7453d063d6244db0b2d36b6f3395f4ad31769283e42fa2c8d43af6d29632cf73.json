@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            g.id,\n            g.title,\n            g.description,\n            g.is_published,\n            g.like_count::bigint AS \"like_count!\",\n            u.display_name AS author_name,\n            COUNT(e.episode_id) FILTER (WHERE e.disposition = 'WATCH')::bigint    AS \"watch_count!\",\n            COUNT(e.episode_id) FILTER (WHERE e.disposition = 'OPTIONAL')::bigint AS \"optional_count!\",\n            COUNT(e.episode_id) FILTER (WHERE e.disposition = 'SKIP')::bigint     AS \"skip_count!\",\n            EXISTS(SELECT 1 FROM skip_guide_like l WHERE l.guide_id = g.id AND l.user_id = $2) AS \"my_like!\",\n            COALESCE(g.author_id = $2, FALSE) AS \"mine!\"\n        FROM skip_guide g\n        LEFT JOIN app_user u ON u.id = g.author_id\n        LEFT JOIN skip_guide_entry e ON e.guide_id = g.id\n        WHERE g.show_id = $1 AND g.is_published = TRUE\n        GROUP BY g.id, u.display_name\n        ORDER BY g.like_count DESC, g.created_at DESC\n        ",
+  "query": "\n        SELECT\n            g.id,\n            g.title,\n            g.description,\n            g.is_published,\n            g.like_count::bigint AS \"like_count!\",\n            COALESCE(u.screen_name, u.display_name) AS author_name,\n            COUNT(e.episode_id) FILTER (WHERE e.disposition = 'WATCH')::bigint    AS \"watch_count!\",\n            COUNT(e.episode_id) FILTER (WHERE e.disposition = 'OPTIONAL')::bigint AS \"optional_count!\",\n            COUNT(e.episode_id) FILTER (WHERE e.disposition = 'SKIP')::bigint     AS \"skip_count!\",\n            EXISTS(SELECT 1 FROM skip_guide_like l WHERE l.guide_id = g.id AND l.user_id = $2) AS \"my_like!\",\n            COALESCE(g.author_id = $2, FALSE) AS \"mine!\"\n        FROM skip_guide g\n        LEFT JOIN app_user u ON u.id = g.author_id\n        LEFT JOIN skip_guide_entry e ON e.guide_id = g.id\n        WHERE g.show_id = $1 AND g.is_published = TRUE\n        GROUP BY g.id, u.screen_name, u.display_name\n        ORDER BY g.like_count DESC, g.created_at DESC\n        ",
   "describe": {
     "columns": [
       {
@@ -71,7 +71,7 @@
       true,
       false,
       null,
-      true,
+      null,
       null,
       null,
       null,
@@ -79,5 +79,5 @@
       null
     ]
   },
-  "hash": "e963fdc5fc137b674e6bac38a9686a35b9ee275e0a53785fb13cccb1ef621e7b"
+  "hash": "7453d063d6244db0b2d36b6f3395f4ad31769283e42fa2c8d43af6d29632cf73"
 }

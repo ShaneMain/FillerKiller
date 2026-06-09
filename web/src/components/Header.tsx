@@ -1,14 +1,17 @@
 import { Link } from "react-router-dom";
 import { useAuth } from "../lib/auth";
+import { useLoginHref } from "../lib/loginNav";
+import { Wordmark } from "./Wordmark";
 
 export function Header() {
   const { user, loading, signOut } = useAuth();
+  const loginHref = useLoginHref();
 
   return (
     <header className="border-b border-zinc-800 bg-zinc-950/80 backdrop-blur sticky top-0 z-10">
       <div className="mx-auto max-w-3xl flex items-center justify-between px-4 py-3">
         <Link to="/" className="text-lg font-bold tracking-tight">
-          Filler<span className="text-rose-500">Killer</span>
+          <Wordmark />
         </Link>
         <div className="text-sm">
           {loading ? (
@@ -27,7 +30,7 @@ export function Header() {
             </div>
           ) : (
             <Link
-              to="/login"
+              to={loginHref}
               className="rounded-md border border-zinc-700 px-3 py-1 text-zinc-200 hover:bg-zinc-800"
             >
               Sign in

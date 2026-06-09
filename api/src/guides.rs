@@ -139,6 +139,19 @@ pub struct GuideDetail {
     pub entries: Vec<GuideEntryView>,
 }
 
+/// A guide as shown in the author's own list (their account page) — includes
+/// drafts, with the show it belongs to for linking.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MyGuide {
+    pub id: Uuid,
+    pub title: String,
+    pub is_published: bool,
+    pub like_count: i64,
+    pub show_slug: String,
+    pub show_name: String,
+}
+
 /// Lightweight ownership/visibility metadata for authorization checks.
 pub struct GuideMeta {
     pub author_id: Option<Uuid>,
@@ -352,7 +365,7 @@ pub async fn list_published(
             g.description,
             g.is_published,
             g.like_count::bigint AS "like_count!",
-            u.display_name AS author_name,
+            COALESCE(u.screen_name, u.display_name) AS author_name,
             COUNT(e.episode_id) FILTER (WHERE e.disposition = 'WATCH')::bigint    AS "watch_count!",
             COUNT(e.episode_id) FILTER (WHERE e.disposition = 'OPTIONAL')::bigint AS "optional_count!",
             COUNT(e.episode_id) FILTER (WHERE e.disposition = 'SKIP')::bigint     AS "skip_count!",
@@ -362,7 +375,7 @@ pub async fn list_published(
         LEFT JOIN app_user u ON u.id = g.author_id
         LEFT JOIN skip_guide_entry e ON e.guide_id = g.id
         WHERE g.show_id = $1 AND g.is_published = TRUE
-        GROUP BY g.id, u.display_name
+        GROUP BY g.id, u.screen_name, u.display_name
         ORDER BY g.like_count DESC, g.created_at DESC
         "#,
         show_id,
@@ -406,7 +419,7 @@ pub async fn get_guide(
             g.description,
             g.is_published,
             g.like_count::bigint AS "like_count!",
-            u.display_name AS author_name,
+            COALESCE(u.screen_name, u.display_name) AS author_name,
             EXISTS(SELECT 1 FROM skip_guide_like l WHERE l.guide_id = g.id AND l.user_id = $2) AS "my_like!",
             COALESCE(g.author_id = $2, FALSE) AS "mine!"
         FROM skip_guide g
@@ -461,6 +474,35 @@ pub async fn get_guide(
         mine: h.mine,
         entries,
     }))
+}
+
+/// All guides authored by a user (published and drafts), newest-updated first,
+/// for their account page.
+pub async fn list_by_author(pool: &PgPool, author_id: Uuid) -> Result<Vec<MyGuide>, sqlx::Error> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT g.id, g.title, g.is_published, g.like_count::bigint AS "like_count!",
+               s.slug AS show_slug, s.name AS show_name
+        FROM skip_guide g
+        JOIN show s ON s.id = g.show_id
+        WHERE g.author_id = $1
+        ORDER BY g.is_published DESC, g.updated_at DESC
+        "#,
+        author_id,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| MyGuide {
+            id: r.id,
+            title: r.title,
+            is_published: r.is_published,
+            like_count: r.like_count,
+            show_slug: r.show_slug,
+            show_name: r.show_name,
+        })
+        .collect())
 }
 
 /// Add the user's like (idempotent). Returns the fresh like count.

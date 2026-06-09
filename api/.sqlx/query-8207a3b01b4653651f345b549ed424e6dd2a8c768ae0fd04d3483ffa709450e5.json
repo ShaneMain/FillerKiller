@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT g.id, g.title, g.is_published, g.like_count::bigint AS \"like_count!\",\n               s.slug AS show_slug, s.name AS show_name\n        FROM skip_guide g\n        JOIN show s ON s.id = g.show_id\n        WHERE g.author_id = $1\n        ORDER BY g.is_published DESC, g.updated_at DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "is_published",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "like_count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "show_slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "show_name",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "8207a3b01b4653651f345b549ed424e6dd2a8c768ae0fd04d3483ffa709450e5"
+}

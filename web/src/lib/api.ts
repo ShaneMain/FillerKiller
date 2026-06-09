@@ -131,6 +131,15 @@ export interface GuideInput {
   published: boolean;
 }
 
+export interface MyGuide {
+  id: string;
+  title: string;
+  isPublished: boolean;
+  likeCount: number;
+  showSlug: string;
+  showName: string;
+}
+
 export class ApiError extends Error {
   status: number;
   code: string;
@@ -198,6 +207,16 @@ export function getMe(): Promise<Me | null> {
   return request(`/me`);
 }
 
+/** Set (or clear, with `null`) the user's screen name. Re-issues the session cookie. */
+export function updateScreenName(name: string | null): Promise<Me> {
+  return request(`/me`, { method: "PUT", body: JSON.stringify({ screenName: name }) });
+}
+
+/** The signed-in user's own guides, published and drafts. */
+export function listMyGuides(): Promise<MyGuide[]> {
+  return request(`/me/guides`);
+}
+
 // ---- User-authored skip guides ----
 
 export function listGuides(showId: string): Promise<GuideSummary[]> {
@@ -244,9 +263,11 @@ export function deleteAccount(): Promise<void> {
   return request(`/me`, { method: "DELETE" });
 }
 
-/** Full-page navigation target to start an OAuth login. */
-export function loginUrl(provider: "google" | "github"): string {
-  return `/api/auth/${provider}/login`;
+/** Full-page navigation target to start an OAuth login. `next` is a site-relative
+ *  path to return to after sign-in. */
+export function loginUrl(provider: "google" | "github", next?: string): string {
+  const q = next ? `?next=${encodeURIComponent(next)}` : "";
+  return `/api/auth/${provider}/login${q}`;
 }
 
 const TMDB_IMG = "https://image.tmdb.org/t/p";

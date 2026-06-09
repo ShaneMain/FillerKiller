@@ -9,6 +9,7 @@ import {
   type ShowDetail,
 } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import { useLoginHref } from "../lib/loginNav";
 import { usePageMeta } from "../lib/meta";
 import { EpisodeRow } from "../components/EpisodeRow";
 
@@ -16,6 +17,7 @@ export function ShowPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const loginHref = useLoginHref();
   const [show, setShow] = useState<ShowDetail | null>(null);
   const [season, setSeason] = useState<number | null>(null);
   const [episodes, setEpisodes] = useState<Episode[] | null>(null);
@@ -130,7 +132,7 @@ export function ShowPage() {
 
       {!user && (
         <p className="mt-5 rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-400">
-          <Link to="/login" className="font-medium text-rose-400 hover:text-rose-300">
+          <Link to={loginHref} className="font-medium text-rose-400 hover:text-rose-300">
             Sign in
           </Link>{" "}
           to vote on episodes.

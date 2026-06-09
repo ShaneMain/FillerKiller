@@ -17,6 +17,7 @@ use crate::AppState;
 
 pub const SESSION_COOKIE: &str = "fk_session";
 pub const STATE_COOKIE: &str = "fk_oauth_state";
+pub const NEXT_COOKIE: &str = "fk_oauth_next";
 const SESSION_TTL_DAYS: i64 = 7;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -95,6 +96,18 @@ pub fn clear_session_cookie(secure: bool) -> Cookie<'static> {
 /// Short-lived CSRF `state` cookie for the OAuth round-trip.
 pub fn state_cookie(state: String, secure: bool) -> Cookie<'static> {
     Cookie::build((STATE_COOKIE, state))
+        .http_only(true)
+        .same_site(SameSite::Lax)
+        .secure(secure)
+        .path("/")
+        .max_age(time::Duration::minutes(10))
+        .build()
+}
+
+/// Short-lived cookie carrying the post-login return path (a site-relative path)
+/// across the OAuth round-trip, so the user lands back where they started.
+pub fn next_cookie(path: String, secure: bool) -> Cookie<'static> {
+    Cookie::build((NEXT_COOKIE, path))
         .http_only(true)
         .same_site(SameSite::Lax)
         .secure(secure)
