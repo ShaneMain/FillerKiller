@@ -90,6 +90,8 @@ pub async fn ensure_show_imported(state: &AppState, tmdb_id: i64) -> Result<Uuid
                 ep.overview.as_deref(),
                 ep.air_date.as_deref().and_then(parse_date),
                 ep.still_path.as_deref(),
+                ep.vote_average,
+                ep.vote_count,
             )
             .await?;
         }

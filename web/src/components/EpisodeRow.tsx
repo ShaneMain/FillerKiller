@@ -47,6 +47,16 @@ export function EpisodeRow({ episode, signedIn }: { episode: Episode; signedIn: 
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="font-medium text-zinc-100">{episode.name ?? "Untitled"}</span>
             <StatusBadge status={score.status} />
+            {episode.tmdbRating != null &&
+              episode.tmdbVoteCount != null &&
+              episode.tmdbVoteCount > 0 && (
+                <span
+                  className="inline-flex items-center gap-0.5 text-xs text-amber-300"
+                  title={`TMDB rating ${episode.tmdbRating.toFixed(1)}/10 from ${episode.tmdbVoteCount} vote${episode.tmdbVoteCount === 1 ? "" : "s"}`}
+                >
+                  ★ {episode.tmdbRating.toFixed(1)}
+                </span>
+              )}
           </div>
 
           <VoteBar

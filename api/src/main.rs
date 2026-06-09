@@ -158,7 +158,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/auth/{provider}/login", get(oauth_login))
         .route("/api/auth/{provider}/callback", get(oauth_callback))
         .route("/api/auth/logout", post(logout))
-        .route("/api/me", get(me))
+        .route("/api/me", get(me).delete(delete_me))
         // Unknown /api paths return our JSON 404 (not the SPA shell), so a
         // mistyped/removed endpoint can't return 200 HTML and break the client's
         // JSON parsing. Specific routes above take precedence over this catch-all.
@@ -335,6 +335,18 @@ async fn search(
         .map(|s| (s.tmdb_id, s))
         .collect();
 
+    // Fraction of each imported show's episodes the community has rated
+    // confidently — a freshness signal in the result list.
+    let imported_ids: Vec<Uuid> = imported.values().map(|s| s.id).collect();
+    let coverage: HashMap<Uuid, f64> = if imported_ids.is_empty() {
+        HashMap::new()
+    } else {
+        db::filler_coverage(&state.pool, &imported_ids, scoring::MIN_VOTES)
+            .await?
+            .into_iter()
+            .collect()
+    };
+
     let results = found
         .results
         .into_iter()
@@ -347,7 +359,9 @@ async fn search(
                 name: r.name,
                 first_air_year: r.first_air_date.as_deref().and_then(import::parse_year),
                 poster_path: r.poster_path,
-                filler_coverage: None, // computed with the voting layer
+                // Imported shows report their coverage (0.0 when nothing's rated
+                // yet); shows we haven't imported report null (no data).
+                filler_coverage: imp.map(|s| coverage.get(&s.id).copied().unwrap_or(0.0)),
             }
         })
         .collect();
@@ -620,6 +634,19 @@ async fn me(OptionalUser(user): OptionalUser) -> impl IntoResponse {
         Some(u) => Json(json!({ "id": u.id, "email": u.email, "displayName": u.name })),
         None => Json(serde_json::Value::Null),
     }
+}
+
+/// `DELETE /api/me` — permanently delete the caller's account. Auth required.
+/// The user's votes are retained but anonymized (the `vote.user_id` FK is
+/// `ON DELETE SET NULL`), so community totals stay intact. Clears the session.
+async fn delete_me(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    jar: CookieJar,
+) -> Result<Response, AppError> {
+    db::delete_user(&state.pool, user.id).await?;
+    let jar = jar.add(auth::clear_session_cookie(state.auth.cookie_secure));
+    Ok((jar, StatusCode::NO_CONTENT).into_response())
 }
 
 /// `POST /api/auth/logout` — clear the session cookie.

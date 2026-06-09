@@ -70,6 +70,10 @@ pub struct EpisodeItem {
     pub name: Option<String>,
     pub air_date: Option<NaiveDate>,
     pub still_path: Option<String>,
+    /// TMDB's own audience rating (0–10) and the vote count behind it. Null until
+    /// the episode is (re)imported from TMDB. Distinct from our filler `score`.
+    pub tmdb_rating: Option<f64>,
+    pub tmdb_vote_count: Option<i32>,
     pub score: EpisodeScoreView,
 }
 

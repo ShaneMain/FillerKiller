@@ -53,6 +53,9 @@ export interface Episode {
   name: string | null;
   airDate: string | null;
   stillPath: string | null;
+  /** TMDB's own audience rating (0–10) and vote count; null until imported. */
+  tmdbRating: number | null;
+  tmdbVoteCount: number | null;
   score: EpisodeScore;
 }
 

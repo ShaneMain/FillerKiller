@@ -31,3 +31,8 @@ dotenvy = "0.15"
 anyhow = "1"
 thiserror = "2"
 governor = "0.8"
+
+[features]
+# DB-backed integration tests (sqlx::test). Off by default so `cargo test` stays
+# fully offline; CI enables it with a Postgres service + DATABASE_URL.
+integration = []

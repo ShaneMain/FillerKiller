@@ -204,19 +204,23 @@ pub async fn upsert_episode(
     overview: Option<&str>,
     air_date: Option<NaiveDate>,
     still_path: Option<&str>,
+    tmdb_vote_average: Option<f64>,
+    tmdb_vote_count: Option<i32>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query!(
         r#"
         INSERT INTO episode (
             show_id, season_id, tmdb_id, season_number, episode_number,
-            name, overview, air_date, still_path
+            name, overview, air_date, still_path, tmdb_vote_average, tmdb_vote_count
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         ON CONFLICT (tmdb_id) DO UPDATE SET
             name = EXCLUDED.name,
             overview = EXCLUDED.overview,
             air_date = EXCLUDED.air_date,
-            still_path = EXCLUDED.still_path
+            still_path = EXCLUDED.still_path,
+            tmdb_vote_average = EXCLUDED.tmdb_vote_average,
+            tmdb_vote_count = EXCLUDED.tmdb_vote_count
         "#,
         show_id,
         season_id,
@@ -227,6 +231,8 @@ pub async fn upsert_episode(
         overview,
         air_date,
         still_path,
+        tmdb_vote_average,
+        tmdb_vote_count,
     )
     .execute(executor)
     .await?;
@@ -253,6 +259,47 @@ pub async fn upsert_user_by_email(
     .fetch_one(pool)
     .await?;
     Ok(id)
+}
+
+/// Permanently delete a user account. The user's votes are NOT deleted: the
+/// `vote.user_id` FK is `ON DELETE SET NULL`, so they're retained anonymously and
+/// the maintained `episode_score` is unaffected. Returns rows deleted (0 or 1).
+pub async fn delete_user(pool: &PgPool, user_id: Uuid) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query!("DELETE FROM app_user WHERE id = $1", user_id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
+}
+
+/// For each given show, the fraction of its episodes that have at least
+/// `min_votes` total votes — i.e. how much of the show the community has rated
+/// confidently. One row per show that has episodes; shows with no episodes are
+/// omitted (the caller treats a missing show as 0.0 coverage).
+pub async fn filler_coverage(
+    pool: &PgPool,
+    show_ids: &[Uuid],
+    min_votes: i64,
+) -> Result<Vec<(Uuid, f64)>, sqlx::Error> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT
+            e.show_id AS "show_id!",
+            (COUNT(*) FILTER (
+                WHERE COALESCE(es.filler_votes, 0)
+                    + COALESCE(es.worth_watching_votes, 0)
+                    + COALESCE(es.canon_votes, 0) >= $2::int8
+            ))::float8 / NULLIF(COUNT(*), 0) AS "coverage!"
+        FROM episode e
+        LEFT JOIN episode_score es ON es.episode_id = e.id
+        WHERE e.show_id = ANY($1)
+        GROUP BY e.show_id
+        "#,
+        show_ids,
+        min_votes,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.show_id, r.coverage)).collect())
 }
 
 /// Seasons for a show with their imported-episode counts, ordered by number.
@@ -309,6 +356,8 @@ pub async fn episodes_with_scores(
             e.name,
             e.air_date,
             e.still_path,
+            e.tmdb_vote_average,
+            e.tmdb_vote_count,
             COALESCE(es.filler_votes, 0)::bigint         AS "filler_votes!",
             COALESCE(es.worth_watching_votes, 0)::bigint AS "worth_watching_votes!",
             COALESCE(es.canon_votes, 0)::bigint          AS "canon_votes!",
@@ -337,6 +386,8 @@ pub async fn episodes_with_scores(
                 name: r.name,
                 air_date: r.air_date,
                 still_path: r.still_path,
+                tmdb_rating: r.tmdb_vote_average,
+                tmdb_vote_count: r.tmdb_vote_count,
                 score: EpisodeScoreView {
                     filler_votes: f,
                     worth_watching_votes: w,
@@ -461,7 +512,7 @@ pub async fn recompute_all_scores(pool: &PgPool) -> Result<u64, sqlx::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::slugify;
+    use super::*;
 
     #[test]
     fn slugify_basic() {
@@ -476,5 +527,48 @@ mod tests {
         assert_eq!(slugify("12 Monkeys"), "12-monkeys");
         assert_eq!(slugify("---"), "");
         assert_eq!(slugify("ＡＢＣ"), ""); // non-ascii letters drop → caller falls back to tmdb id
+    }
+
+    /// End-to-end check of the `episode_score` denormalization: the trigger keeps
+    /// the tally current across INSERT/UPDATE/DELETE of votes, `recompute_all_scores`
+    /// agrees with it, and deleting a user retains (anonymizes) their votes rather
+    /// than dropping the counts. Runs against a throwaway DB (`sqlx::test`).
+    #[cfg(feature = "integration")]
+    #[sqlx::test]
+    async fn episode_score_trigger_and_anonymize(pool: sqlx::PgPool) {
+        let show = upsert_show(&pool, 9001, "Trigger Test", "trigger-test", Some(2020), None, None)
+            .await
+            .unwrap();
+        let season = upsert_season(&pool, show, 1, Some("Season 1")).await.unwrap();
+        upsert_episode(
+            &pool, show, season, 8001, 1, 1, Some("Ep 1"), None, None, None, None, None,
+        )
+        .await
+        .unwrap();
+        let ep_id = episodes_with_scores(&pool, show, Some(1), None).await.unwrap()[0].id;
+
+        let alice = upsert_user_by_email(&pool, "alice@test.local", Some("Alice")).await.unwrap();
+        let bob = upsert_user_by_email(&pool, "bob@test.local", Some("Bob")).await.unwrap();
+
+        // Trigger maintains the tally on INSERT.
+        upsert_vote(&pool, alice, ep_id, "FILLER").await.unwrap();
+        upsert_vote(&pool, bob, ep_id, "CANON").await.unwrap();
+        assert_eq!(episode_aggregate(&pool, ep_id).await.unwrap(), (1, 0, 1));
+
+        // ...on UPDATE (a user changing their vote).
+        upsert_vote(&pool, alice, ep_id, "WORTH_WATCHING").await.unwrap();
+        assert_eq!(episode_aggregate(&pool, ep_id).await.unwrap(), (0, 1, 1));
+
+        // ...and on DELETE.
+        delete_vote(&pool, bob, ep_id).await.unwrap();
+        assert_eq!(episode_aggregate(&pool, ep_id).await.unwrap(), (0, 1, 0));
+
+        // A full rebuild agrees with the trigger-maintained tally.
+        recompute_all_scores(&pool).await.unwrap();
+        assert_eq!(episode_aggregate(&pool, ep_id).await.unwrap(), (0, 1, 0));
+
+        // Deleting Alice keeps her vote (anonymized): the count is unchanged.
+        assert_eq!(delete_user(&pool, alice).await.unwrap(), 1);
+        assert_eq!(episode_aggregate(&pool, ep_id).await.unwrap(), (0, 1, 0));
     }
 }

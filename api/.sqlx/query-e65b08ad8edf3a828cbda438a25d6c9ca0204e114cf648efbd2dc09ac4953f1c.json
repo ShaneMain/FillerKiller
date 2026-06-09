@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            e.show_id AS \"show_id!\",\n            (COUNT(*) FILTER (\n                WHERE COALESCE(es.filler_votes, 0)\n                    + COALESCE(es.worth_watching_votes, 0)\n                    + COALESCE(es.canon_votes, 0) >= $2::int8\n            ))::float8 / NULLIF(COUNT(*), 0) AS \"coverage!\"\n        FROM episode e\n        LEFT JOIN episode_score es ON es.episode_id = e.id\n        WHERE e.show_id = ANY($1)\n        GROUP BY e.show_id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "show_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "coverage!",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "e65b08ad8edf3a828cbda438a25d6c9ca0204e114cf648efbd2dc09ac4953f1c"
+}
