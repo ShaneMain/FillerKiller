@@ -87,12 +87,68 @@ pub async fn pick_unique_slug(
     }
 }
 
+/// Claim a show for a background refresh when its cache is older than the TTL OR
+/// it has no TMDB rating yet (a "cold" show imported before the rating fields
+/// existed — it self-heals on first view). This is an atomic conditional bump of
+/// `last_synced_at`, so when many viewers hit the same show at once only the
+/// first wins the claim; the rest see it fresh and skip. Returns the show's
+/// tmdb_id and whether it was cold (a cold show needs a FULL re-fetch to fill
+/// every episode's rating; a merely-stale one needs only the incremental refresh).
+pub async fn claim_show_refresh(
+    pool: &PgPool,
+    show_id: Uuid,
+    active_ttl_hours: i32,
+    ended_ttl_hours: i32,
+) -> Result<Option<(i64, bool)>, sqlx::Error> {
+    // The cadence is tiered by recency: a show whose latest episode aired within
+    // ~2 years uses the active TTL; one that's been off the air longer (treated
+    // as ended — rarely changes) uses the much longer ended TTL.
+    let row = sqlx::query!(
+        r#"
+        UPDATE show SET last_synced_at = now()
+        WHERE id = $1
+          AND (
+            tmdb_vote_average IS NULL
+            OR last_synced_at < now() - make_interval(hours => CASE
+                 WHEN (SELECT max(e.air_date) FROM episode e WHERE e.show_id = show.id)
+                      < (now() - interval '2 years')::date
+                 THEN $3::int
+                 ELSE $2::int
+               END)
+          )
+        RETURNING tmdb_id, (tmdb_vote_average IS NULL) AS "cold!"
+        "#,
+        show_id,
+        active_ttl_hours,
+        ended_ttl_hours,
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| (r.tmdb_id, r.cold)))
+}
+
 /// Our internal show id for a TMDB id, if the show has been imported.
 pub async fn find_show_id_by_tmdb(pool: &PgPool, tmdb_id: i64) -> Result<Option<Uuid>, sqlx::Error> {
     let row = sqlx::query_scalar!("SELECT id FROM show WHERE tmdb_id = $1", tmdb_id)
         .fetch_optional(pool)
         .await?;
     Ok(row)
+}
+
+/// Imported episode count per season for a show. Drives the incremental refresh:
+/// re-fetch only seasons that are new (absent here) or have grown (TMDB reports
+/// more episodes than we hold).
+pub async fn season_episode_counts(
+    pool: &PgPool,
+    show_id: Uuid,
+) -> Result<Vec<(i32, i64)>, sqlx::Error> {
+    let rows = sqlx::query!(
+        r#"SELECT season_number, COUNT(*) AS "n!" FROM episode WHERE show_id = $1 GROUP BY season_number"#,
+        show_id
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.season_number, r.n)).collect())
 }
 
 /// Our internal show id for a URL slug, if any.
@@ -222,7 +278,9 @@ pub async fn upsert_season(
 // slot already held by a different row, the second constraint can raise a unique
 // violation. First-import of a fresh show cannot hit this. Resolve alongside the
 // TTL-refresh feature — e.g. delete-then-insert within the import tx.
-#[allow(clippy::too_many_arguments)]
+// Single-episode upsert, retained for tests (the import/refresh path uses the
+// bulk `upsert_episodes`).
+#[allow(clippy::too_many_arguments, dead_code)]
 pub async fn upsert_episode(
     executor: impl sqlx::PgExecutor<'_>,
     show_id: Uuid,
@@ -263,6 +321,46 @@ pub async fn upsert_episode(
         still_path,
         tmdb_vote_average,
         tmdb_vote_count,
+    )
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
+/// Bulk-upsert a season's episodes in ONE statement (a single DB round-trip
+/// instead of one per episode) — the import/refresh hot path. `episodes` is a
+/// JSONB array of objects with the columns below (nulls allowed); conflicts on
+/// `tmdb_id` update the mutable fields.
+pub async fn upsert_episodes(
+    executor: impl sqlx::PgExecutor<'_>,
+    show_id: Uuid,
+    season_id: Uuid,
+    episodes: &serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        r#"
+        INSERT INTO episode (
+            show_id, season_id, tmdb_id, season_number, episode_number,
+            name, overview, air_date, still_path, tmdb_vote_average, tmdb_vote_count
+        )
+        SELECT $1, $2, e.tmdb_id, e.season_number, e.episode_number, e.name, e.overview,
+               e.air_date, e.still_path, e.tmdb_vote_average, e.tmdb_vote_count
+        FROM jsonb_to_recordset($3) AS e(
+            tmdb_id bigint, season_number int, episode_number int, name text,
+            overview text, air_date date, still_path text,
+            tmdb_vote_average float8, tmdb_vote_count int
+        )
+        ON CONFLICT (tmdb_id) DO UPDATE SET
+            name = EXCLUDED.name,
+            overview = EXCLUDED.overview,
+            air_date = EXCLUDED.air_date,
+            still_path = EXCLUDED.still_path,
+            tmdb_vote_average = EXCLUDED.tmdb_vote_average,
+            tmdb_vote_count = EXCLUDED.tmdb_vote_count
+        "#,
+        show_id,
+        season_id,
+        episodes,
     )
     .execute(executor)
     .await?;

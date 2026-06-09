@@ -67,6 +67,10 @@ pub struct AppState {
     /// pages. `None` when not serving static files (the box deploy serves the SPA
     /// via Caddy, so there is no server-side rendering to do).
     pub index_html: Option<Arc<String>>,
+    /// Hours before a viewed RECENT show is re-synced from TMDB (background).
+    pub refresh_ttl_hours: i32,
+    /// Hours before a viewed ENDED show (no episode in ~2 years) is re-synced.
+    pub refresh_ttl_hours_ended: i32,
 }
 
 #[tokio::main]
@@ -138,6 +142,8 @@ async fn main() -> anyhow::Result<()> {
         user_rate_limiter: rate_limit::user_limiter(config.vote_rate_per_minute),
         import_limiter: rate_limit::direct_limiter(config.import_rate_per_minute),
         index_html,
+        refresh_ttl_hours: config.refresh_ttl_hours,
+        refresh_ttl_hours_ended: config.refresh_ttl_hours_ended,
     };
 
     // Evict idle per-IP buckets periodically so the keyed limiter doesn't grow
@@ -268,7 +274,15 @@ async fn run_recompute_scores(config: &Config) -> anyhow::Result<()> {
 /// Best-effort — logs and continues past per-show failures. Preserves slugs and
 /// never touches the vote/score layer. Run as a one-off ops step.
 async fn run_refresh_catalog(config: &Config) -> anyhow::Result<()> {
-    let pool = connect_pool(config).await?;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    const CONCURRENCY: usize = 8;
+
+    let pool = PgPoolOptions::new()
+        .max_connections(CONCURRENCY as u32)
+        .acquire_timeout(Duration::from_secs(30))
+        .connect(&config.database_url)
+        .await?;
     let http = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(15))
@@ -280,15 +294,33 @@ async fn run_refresh_catalog(config: &Config) -> anyhow::Result<()> {
     );
     let ids = db::all_show_tmdb_ids(&pool).await?;
     let total = ids.len();
-    tracing::info!("refreshing {total} shows from TMDB");
+    tracing::info!("refreshing {total} shows from TMDB (concurrency {CONCURRENCY})");
+
+    // Bound concurrency with a semaphore: each show is independent, so refresh up
+    // to CONCURRENCY at once (gentle on TMDB, far faster than sequential).
+    let sem = Arc::new(tokio::sync::Semaphore::new(CONCURRENCY));
+    let done = Arc::new(AtomicUsize::new(0));
+    let mut set = tokio::task::JoinSet::new();
+    for id in ids {
+        let permit = sem.clone().acquire_owned().await.expect("semaphore open");
+        let (tmdb, pool, done) = (tmdb.clone(), pool.clone(), done.clone());
+        set.spawn(async move {
+            let _permit = permit;
+            let ok = import::import_show(&tmdb, &pool, id).await.is_ok();
+            if !ok {
+                tracing::warn!("refresh show tmdb:{id} failed");
+            }
+            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+            if n % 25 == 0 || n == total {
+                tracing::info!("refreshed {n}/{total}");
+            }
+            ok
+        });
+    }
     let mut ok = 0usize;
-    for (i, id) in ids.iter().enumerate() {
-        match import::import_show(&tmdb, &pool, *id).await {
-            Ok(_) => ok += 1,
-            Err(e) => tracing::warn!("refresh show tmdb:{id} failed: {e:?}"),
-        }
-        if (i + 1) % 25 == 0 || i + 1 == total {
-            tracing::info!("refreshed {}/{}", i + 1, total);
+    while let Some(res) = set.join_next().await {
+        if matches!(res, Ok(true)) {
+            ok += 1;
         }
     }
     tracing::info!("catalog refresh done: {ok}/{total} shows updated");

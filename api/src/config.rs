@@ -26,6 +26,13 @@ pub struct Config {
     /// Max TMDB import-on-demand fan-outs per instance per minute (caps outbound
     /// load from the unauthenticated import path).
     pub import_rate_per_minute: u32,
+    /// Refresh cadence for a RECENT show (latest episode within ~2 years): how
+    /// long its cache is fresh before a viewed show is re-synced in the
+    /// background. The refresh itself is incremental (only new/grown seasons).
+    pub refresh_ttl_hours: i32,
+    /// Refresh cadence for an ENDED show (no episode in ~2 years): such shows
+    /// rarely change, so they refresh far less often (default ~semi-monthly).
+    pub refresh_ttl_hours_ended: i32,
     /// Directory of the built SPA to serve as a fallback (same-origin SPA+API on
     /// one service, e.g. Cloud Run). Unset → don't serve static files (the box
     /// deploy serves the SPA via Caddy instead).
@@ -80,6 +87,10 @@ impl Config {
             import_rate_per_minute: optional("IMPORT_RATE_PER_MINUTE", "20")
                 .parse()
                 .unwrap_or(20),
+            refresh_ttl_hours: optional("REFRESH_TTL_HOURS", "72").parse().unwrap_or(72),
+            refresh_ttl_hours_ended: optional("REFRESH_TTL_HOURS_ENDED", "360")
+                .parse()
+                .unwrap_or(360),
             static_dir: std::env::var("STATIC_DIR").ok().filter(|s| !s.trim().is_empty()),
             auth: {
                 let base_url = optional("AUTH_BASE_URL", "http://localhost:8080");

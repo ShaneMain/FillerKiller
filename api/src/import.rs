@@ -16,25 +16,117 @@ use crate::AppState;
 /// Accepts, in order: `tmdb:<n>` (import-on-demand), a URL slug, or a bare UUID
 /// (kept for back-compat with older links). Unknown → 404.
 pub async fn resolve_show_id(state: &AppState, id_param: &str) -> Result<Uuid, AppError> {
-    if let Some(rest) = id_param.strip_prefix("tmdb:") {
+    let id = if let Some(rest) = id_param.strip_prefix("tmdb:") {
         let tmdb_id: i64 = rest
             .parse()
             .map_err(|_| AppError::BadRequest(format!("invalid tmdb id: {rest:?}")))?;
-        return ensure_show_imported(state, tmdb_id).await;
-    }
+        ensure_show_imported(state, tmdb_id).await?
+    } else if let Some(id) = db::find_show_id_by_slug(&state.pool, id_param).await? {
+        id
+    } else if let Ok(uuid) = Uuid::parse_str(id_param) {
+        // Legacy: a bare UUID still resolves so old links keep working.
+        match db::find_show_core(&state.pool, uuid).await? {
+            Some(_) => uuid,
+            None => return Err(AppError::NotFound(format!("show {id_param:?} not found"))),
+        }
+    } else {
+        return Err(AppError::NotFound(format!("show {id_param:?} not found")));
+    };
 
-    if let Some(id) = db::find_show_id_by_slug(&state.pool, id_param).await? {
-        return Ok(id);
-    }
+    // Keep viewed shows fresh without blocking the response (TMDB ratings drift;
+    // ongoing shows add episodes). The DB claim dedupes concurrent viewers.
+    maybe_refresh_in_background(state, id);
+    Ok(id)
+}
 
-    // Legacy: a bare UUID still resolves so old links keep working.
-    if let Ok(id) = Uuid::parse_str(id_param) {
-        if db::find_show_core(&state.pool, id).await?.is_some() {
-            return Ok(id);
+/// Spawn a background, TTL-gated refresh of a viewed show. Adds nothing to the
+/// request's latency: the claim and the refresh both run off the request path,
+/// and `claim_show_refresh` atomically ensures only one viewer per TTL refreshes.
+fn maybe_refresh_in_background(state: &AppState, show_id: Uuid) {
+    let state = state.clone();
+    tokio::spawn(async move {
+        match db::claim_show_refresh(
+            &state.pool,
+            show_id,
+            state.refresh_ttl_hours,
+            state.refresh_ttl_hours_ended,
+        )
+        .await
+        {
+            Ok(Some((tmdb_id, cold))) => {
+                // A cold show (no rating yet → predates the TMDB-rating fields) gets
+                // a FULL re-import so every episode's rating is filled; a merely
+                // stale show needs only the cheap incremental refresh.
+                let result = if cold {
+                    import_show(&state.tmdb, &state.pool, tmdb_id).await.map(|_| ())
+                } else {
+                    refresh_show(&state.tmdb, &state.pool, tmdb_id).await
+                };
+                if let Err(e) = result {
+                    tracing::warn!("background refresh of show tmdb:{tmdb_id} failed: {e:?}");
+                }
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!("refresh claim failed for show {show_id}: {e}"),
+        }
+    });
+}
+
+/// Incrementally refresh an already-imported show with MINIMAL TMDB calls: one
+/// series-detail call (updates the show's metadata + overall rating and reveals
+/// the current season list), then re-fetch ONLY seasons that are new or have
+/// gained episodes. A stable/ended show costs a single call; an ongoing show
+/// costs one more for the airing season. Episode ratings in unchanged seasons
+/// drift until that season changes (or a full `refresh-catalog`). All fetches
+/// happen before the write tx; slug and the vote/score layer are preserved.
+pub async fn refresh_show(tmdb: &TmdbClient, pool: &PgPool, tmdb_id: i64) -> Result<(), AppError> {
+    let detail = tmdb.get_show(tmdb_id).await?;
+    let Some(show_id) = db::find_show_id_by_tmdb(pool, tmdb_id).await? else {
+        return Ok(()); // deleted since the claim; nothing to refresh
+    };
+    let have: std::collections::HashMap<i32, i64> = db::season_episode_counts(pool, show_id)
+        .await?
+        .into_iter()
+        .collect();
+
+    // Fetch only seasons that are new or have grown — up front, before the tx.
+    let mut fetched = Vec::new();
+    for season in &detail.seasons {
+        let have_count = have.get(&season.season_number).copied().unwrap_or(0);
+        if have_count < season.episode_count as i64 {
+            let full = tmdb.get_season(tmdb_id, season.season_number).await?;
+            fetched.push((season, full));
         }
     }
 
-    Err(AppError::NotFound(format!("show {id_param:?} not found")))
+    let mut tx = pool.begin().await?;
+    // Update the show's metadata + overall rating. The slug arg is only used on
+    // insert; this is an existing row, so ON CONFLICT keeps the original slug.
+    db::upsert_show(
+        &mut *tx,
+        detail.id,
+        &detail.name,
+        &db::slugify(&detail.name),
+        detail.first_air_date.as_deref().and_then(parse_year),
+        detail.poster_path.as_deref(),
+        detail.overview.as_deref(),
+        detail.vote_average,
+        detail.vote_count,
+    )
+    .await?;
+    for (season, full) in &fetched {
+        let season_id =
+            db::upsert_season(&mut *tx, show_id, season.season_number, Some(&season.name)).await?;
+        write_episodes(&mut *tx, show_id, season_id, &full.episodes).await?;
+    }
+    tx.commit().await?;
+    if !fetched.is_empty() {
+        tracing::info!(
+            "refreshed show tmdb:{tmdb_id}: {} season(s) updated",
+            fetched.len()
+        );
+    }
+    Ok(())
 }
 
 /// Ensure a TMDB show (and its seasons + episodes) is imported. Returns our id.
@@ -89,28 +181,43 @@ pub async fn import_show(tmdb: &TmdbClient, pool: &PgPool, tmdb_id: i64) -> Resu
     for (season, full) in &seasons {
         let season_id =
             db::upsert_season(&mut *tx, show_id, season.season_number, Some(&season.name)).await?;
-        for ep in &full.episodes {
-            db::upsert_episode(
-                &mut *tx,
-                show_id,
-                season_id,
-                ep.id,
-                ep.season_number,
-                ep.episode_number,
-                Some(&ep.name),
-                ep.overview.as_deref(),
-                ep.air_date.as_deref().and_then(parse_date),
-                ep.still_path.as_deref(),
-                ep.vote_average,
-                ep.vote_count,
-            )
-            .await?;
-        }
+        write_episodes(&mut *tx, show_id, season_id, &full.episodes).await?;
     }
     tx.commit().await?;
 
     tracing::info!("imported show tmdb:{tmdb_id} ({})", detail.name);
     Ok(show_id)
+}
+
+/// Bulk-upsert a season's episodes (one statement) by encoding them as a JSONB
+/// array. A no-op for an empty season. Empty TMDB air dates become null.
+async fn write_episodes(
+    executor: impl sqlx::PgExecutor<'_>,
+    show_id: Uuid,
+    season_id: Uuid,
+    episodes: &[crate::tmdb::TmdbEpisode],
+) -> Result<(), AppError> {
+    if episodes.is_empty() {
+        return Ok(());
+    }
+    let rows: Vec<serde_json::Value> = episodes
+        .iter()
+        .map(|ep| {
+            serde_json::json!({
+                "tmdb_id": ep.id,
+                "season_number": ep.season_number,
+                "episode_number": ep.episode_number,
+                "name": ep.name,
+                "overview": ep.overview,
+                "air_date": ep.air_date.as_deref().and_then(parse_date),
+                "still_path": ep.still_path,
+                "tmdb_vote_average": ep.vote_average,
+                "tmdb_vote_count": ep.vote_count,
+            })
+        })
+        .collect();
+    db::upsert_episodes(executor, show_id, season_id, &serde_json::Value::Array(rows)).await?;
+    Ok(())
 }
 
 /// Parse the year from a TMDB date string like "2011-04-17".

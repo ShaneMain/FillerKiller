@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE show SET last_synced_at = now()\n        WHERE id = $1\n          AND (\n            tmdb_vote_average IS NULL\n            OR last_synced_at < now() - make_interval(hours => CASE\n                 WHEN (SELECT max(e.air_date) FROM episode e WHERE e.show_id = show.id)\n                      < (now() - interval '2 years')::date\n                 THEN $3::int\n                 ELSE $2::int\n               END)\n          )\n        RETURNING tmdb_id, (tmdb_vote_average IS NULL) AS \"cold!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "tmdb_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "cold!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "04f38800afd655088e8ca6ed68980af72b2028459f8cd9730de80ae7b7b7e12e"
+}
