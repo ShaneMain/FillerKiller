@@ -56,9 +56,10 @@ export function PrivacyPage() {
           <p className="mt-2">
             You can permanently delete your account at any time from your{" "}
             <Link to="/account" className="text-rose-400 hover:text-rose-300">account page</Link>.
-            This erases your personal data — your email and display name. Your past votes are
-            retained as anonymous aggregate counts that are no longer linked to you, so the
-            community verdicts stay intact. Deletion is immediate and irreversible.
+            This erases your personal data — your email and display name — and any skip guides
+            you've created. Your past votes are retained as anonymous aggregate counts that are
+            no longer linked to you, so the community verdicts stay intact. Deletion is immediate
+            and irreversible.
           </p>
         </section>
 

@@ -68,9 +68,9 @@ export function AccountPage() {
       <section className="mt-10 rounded-lg border border-rose-900/60 bg-rose-950/20 p-4">
         <h2 className="text-lg font-semibold text-rose-300">Delete account</h2>
         <p className="mt-1 text-sm text-zinc-400">
-          Permanently deletes your account and personal info (your name and email). Your past
-          votes are kept anonymously as part of the community totals — they're no longer linked
-          to you. This cannot be undone.
+          Permanently deletes your account, personal info (your name and email), and any skip
+          guides you've created. Your past votes are kept anonymously as part of the community
+          totals — they're no longer linked to you. This cannot be undone.
         </p>
 
         {err && <p className="mt-3 text-sm text-rose-400">{err}</p>}

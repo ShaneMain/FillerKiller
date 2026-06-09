@@ -565,10 +565,8 @@ mod tests {
         // A draft (unpublished) doesn't count against the cap.
         create_guide(&pool, show, author, &input("Draft", false)).await.unwrap();
 
-        // Deleting the author keeps the guides, anonymized (author_id -> NULL).
+        // Deleting the author DELETES their guides (FK ON DELETE CASCADE).
         db::delete_user(&pool, author).await.unwrap();
-        let after = get_guide(&pool, gid, None).await.unwrap().unwrap();
-        assert_eq!(after.author_name, None);
-        assert!(after.is_published);
+        assert!(get_guide(&pool, gid, None).await.unwrap().is_none());
     }
 }

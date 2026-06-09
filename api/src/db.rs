@@ -269,9 +269,10 @@ pub async fn upsert_user_by_email(
     Ok(id)
 }
 
-/// Permanently delete a user account. The user's votes are NOT deleted: the
-/// `vote.user_id` FK is `ON DELETE SET NULL`, so they're retained anonymously and
-/// the maintained `episode_score` is unaffected. Returns rows deleted (0 or 1).
+/// Permanently delete a user account. Votes are retained anonymously (the
+/// `vote.user_id` FK is `ON DELETE SET NULL`, so `episode_score` is unaffected),
+/// but the user's authored skip guides ARE removed (that FK is `ON DELETE
+/// CASCADE`). Returns rows deleted (0 or 1).
 pub async fn delete_user(pool: &PgPool, user_id: Uuid) -> Result<u64, sqlx::Error> {
     let res = sqlx::query!("DELETE FROM app_user WHERE id = $1", user_id)
         .execute(pool)

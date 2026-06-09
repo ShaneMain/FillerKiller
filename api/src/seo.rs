@@ -9,6 +9,7 @@
 //! single Rust container. Also builds the DB-driven sitemap.
 
 use crate::db::ShowCore;
+use crate::guides::{Disposition, GuideDetail};
 use crate::models::SeasonSummary;
 use crate::scoring::{SkipGuide, SkipGuideEntry};
 
@@ -186,6 +187,64 @@ pub fn skip_guide_page(template: &str, base: &str, core: &ShowCore, guide: &Skip
     render_page(template, &head, &body)
 }
 
+/// Render a user-authored guide's share page: per-guide SEO head + the curated
+/// watch/optional/skip lists as crawlable content. Caller passes only published
+/// guides.
+pub fn guide_page(template: &str, base: &str, guide: &GuideDetail) -> String {
+    let base = base.trim_end_matches('/');
+    let canonical = format!("{base}/shows/{}/guides/{}", guide.show_slug, guide.id);
+    let count = |d: Disposition| guide.entries.iter().filter(|e| e.disposition == d).count();
+    let (w, o, s) = (count(Disposition::Watch), count(Disposition::Optional), count(Disposition::Skip));
+    let description = match guide.description.as_deref() {
+        Some(d) if !d.trim().is_empty() => truncate(d, 160),
+        _ => format!("A {} skip guide: {w} to watch, {o} optional, {s} to skip.", guide.show_name),
+    };
+    let head = head_tags(&PageMeta {
+        title: format!("{} — {} skip guide — {SITE}", guide.title, guide.show_name),
+        description,
+        canonical,
+        image: Some(format!("{base}/og-image.png")),
+    });
+
+    let mut body = String::new();
+    body.push_str(&format!("<h1>{}</h1>", html_escape(&guide.title)));
+    body.push_str(&format!(
+        "<p>A {} skip guide by {}</p>",
+        html_escape(&guide.show_name),
+        html_escape(guide.author_name.as_deref().unwrap_or("a former member"))
+    ));
+    if let Some(d) = guide.description.as_deref() {
+        if !d.trim().is_empty() {
+            body.push_str(&format!("<p>{}</p>", html_escape(d)));
+        }
+    }
+    for (label, disp) in [
+        ("Watch", Disposition::Watch),
+        ("Optional — worth it", Disposition::Optional),
+        ("Skip", Disposition::Skip),
+    ] {
+        let items: Vec<_> = guide.entries.iter().filter(|e| e.disposition == disp).collect();
+        body.push_str(&format!("<h2>{label} ({})</h2>", items.len()));
+        if items.is_empty() {
+            body.push_str("<p>None.</p>");
+        } else {
+            body.push_str("<ul>");
+            for e in items {
+                let name = e.name.as_deref().unwrap_or("Untitled");
+                body.push_str(&format!(
+                    "<li>S{}E{} — {}</li>",
+                    e.season_number,
+                    e.episode_number,
+                    html_escape(name)
+                ));
+            }
+            body.push_str("</ul>");
+        }
+    }
+
+    render_page(template, &head, &body)
+}
+
 fn render_bucket(body: &mut String, title: &str, entries: &[SkipGuideEntry]) {
     body.push_str(&format!("<h2>{title} ({})</h2>", entries.len()));
     if entries.is_empty() {
@@ -264,6 +323,36 @@ mod tests {
     fn render_page_is_noop_without_markers() {
         let tmpl = "<head><title>x</title></head><body>no root</body>";
         assert_eq!(render_page(tmpl, "<title>y</title>", "<h1>z</h1>"), tmpl);
+    }
+
+    #[test]
+    fn guide_page_renders_head_and_escaped_buckets() {
+        use crate::guides::{Disposition, GuideDetail, GuideEntryView};
+        use uuid::Uuid;
+        let guide = GuideDetail {
+            id: Uuid::nil(),
+            show_id: Uuid::nil(),
+            show_slug: "breaking-bad".into(),
+            show_name: "Breaking Bad".into(),
+            title: "Story only <x>".into(),
+            description: Some("Just the essentials".into()),
+            author_name: Some("Ann".into()),
+            like_count: 3,
+            is_published: true,
+            my_like: false,
+            mine: false,
+            entries: vec![
+                GuideEntryView { episode_id: Uuid::nil(), season_number: 1, episode_number: 1, name: Some("Pilot".into()), disposition: Disposition::Watch },
+                GuideEntryView { episode_id: Uuid::nil(), season_number: 1, episode_number: 2, name: None, disposition: Disposition::Skip },
+            ],
+        };
+        let tmpl = "<head><!--head--><title>D</title><!--/head--></head><body><div id=\"root\"></div></body>";
+        let out = guide_page(tmpl, "https://fillerkiller.app", &guide);
+        assert!(out.contains("Story only &lt;x&gt; — Breaking Bad skip guide"), "{out}");
+        assert!(out.contains("/shows/breaking-bad/guides/00000000-0000-0000-0000-000000000000"));
+        assert!(out.contains("<h2>Watch (1)</h2>"));
+        assert!(out.contains("<h2>Skip (1)</h2>"));
+        assert!(out.contains("S1E1 — Pilot"));
     }
 
     #[test]

@@ -201,6 +201,7 @@ async fn main() -> anyhow::Result<()> {
             // content snapshot); everything else falls through to the SPA shell.
             app.route("/shows/{slug}", get(show_html))
                 .route("/shows/{slug}/skip-guide", get(skip_guide_html))
+                .route("/shows/{slug}/guides/{guide_id}", get(guide_html))
                 .route("/sitemap.xml", get(sitemap))
                 .fallback_service(ServeDir::new(dir).fallback(index))
         }
@@ -557,6 +558,28 @@ async fn skip_guide_html(State(state): State<AppState>, Path(slug): Path<String>
             seo::skip_guide_page(&template, &state.auth.base_url, &core, &guide)
         }
         None => template.as_str().to_string(),
+    };
+    html_response(html)
+}
+
+/// `GET /shows/{slug}/guides/{guide_id}` — server-rendered share page for a
+/// published user guide (per-guide head + the curated lists as content). Drafts,
+/// unknown ids, and the SPA-only `/guides/new` route fall back to the plain shell.
+async fn guide_html(
+    State(state): State<AppState>,
+    Path((_slug, guide_id)): Path<(String, String)>,
+) -> Response {
+    let Some(template) = state.index_html.clone() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let html = match Uuid::parse_str(&guide_id) {
+        Ok(gid) => match guides::get_guide(&state.pool, gid, None).await {
+            Ok(Some(guide)) if guide.is_published => {
+                seo::guide_page(&template, &state.auth.base_url, &guide)
+            }
+            _ => template.as_str().to_string(),
+        },
+        Err(_) => template.as_str().to_string(),
     };
     html_response(html)
 }
