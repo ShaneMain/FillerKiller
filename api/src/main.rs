@@ -13,6 +13,7 @@ mod oauth;
 mod rate_limit;
 mod response;
 mod scoring;
+mod seo;
 mod tmdb;
 
 use std::collections::HashMap;
@@ -22,7 +23,7 @@ use std::time::Duration;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::Next;
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{any, get, post, put};
 use axum::{Json, Router};
 use axum_extra::extract::CookieJar;
@@ -61,6 +62,10 @@ pub struct AppState {
     /// unauthenticated and fans out several upstream calls, so bound how often a
     /// fresh show can be imported to cap the outbound load any traffic can induce.
     pub import_limiter: Arc<DirectRateLimiter>,
+    /// The built SPA's `index.html`, used as the template for server-rendered SEO
+    /// pages. `None` when not serving static files (the box deploy serves the SPA
+    /// via Caddy, so there is no server-side rendering to do).
+    pub index_html: Option<Arc<String>>,
 }
 
 #[tokio::main]
@@ -112,6 +117,15 @@ async fn main() -> anyhow::Result<()> {
         config.tmdb_image_base_url.clone(),
     );
 
+    // Load the SPA shell once for server-side SEO rendering (single-container
+    // deploy only; absent on the Caddy box deploy where static_dir is unset).
+    let index_html = config
+        .static_dir
+        .as_deref()
+        .filter(|d| std::path::Path::new(d).is_dir())
+        .and_then(|d| std::fs::read_to_string(format!("{d}/index.html")).ok())
+        .map(Arc::new);
+
     let cors = build_cors(&config.cors_allowed_origin);
     let state = AppState {
         pool,
@@ -121,6 +135,7 @@ async fn main() -> anyhow::Result<()> {
         rate_limiter: rate_limit::ip_limiter(config.vote_rate_per_minute),
         user_rate_limiter: rate_limit::user_limiter(config.vote_rate_per_minute),
         import_limiter: rate_limit::direct_limiter(config.import_rate_per_minute),
+        index_html,
     };
 
     // Evict idle per-IP buckets periodically so the keyed limiter doesn't grow
@@ -172,7 +187,12 @@ async fn main() -> anyhow::Result<()> {
         Some(dir) if std::path::Path::new(dir).is_dir() => {
             let index = ServeFile::new(format!("{dir}/index.html"));
             tracing::info!("serving SPA from {dir}");
-            app.fallback_service(ServeDir::new(dir).fallback(index))
+            // Server-render the SEO-critical routes (per-page meta + a crawlable
+            // content snapshot); everything else falls through to the SPA shell.
+            app.route("/shows/{slug}", get(show_html))
+                .route("/shows/{slug}/skip-guide", get(skip_guide_html))
+                .route("/sitemap.xml", get(sitemap))
+                .fallback_service(ServeDir::new(dir).fallback(index))
         }
         Some(dir) => {
             tracing::warn!("STATIC_DIR {dir:?} not found; serving API only");
@@ -458,6 +478,94 @@ async fn get_skip_guide(
 
     let guide = build_skip_guide(&scored, contested, params.specials.unwrap_or(false));
     Ok(cacheable_json(&guide, TTL_AGGREGATE))
+}
+
+// ---- Server-side SEO rendering (single-container deploy) --------------------
+
+/// Shared-cacheable HTML response for a server-rendered SPA page. No per-user
+/// data is embedded (the SPA fetches that client-side), so it's safe to cache.
+fn html_response(html: String) -> Response {
+    (
+        [(axum::http::header::CACHE_CONTROL, "public, max-age=600")],
+        Html(html),
+    )
+        .into_response()
+}
+
+/// Look up a show by slug only (never imports) for the server-rendered pages.
+async fn show_core_by_slug(state: &AppState, slug: &str) -> Option<db::ShowCore> {
+    match db::find_show_id_by_slug(&state.pool, slug).await {
+        Ok(Some(id)) => db::find_show_core(&state.pool, id).await.ok().flatten(),
+        _ => None,
+    }
+}
+
+/// `GET /shows/{slug}` — show page with per-show SEO `<head>` + a crawlable
+/// content snapshot injected into the shell. An unknown slug falls back to the
+/// plain SPA shell, which resolves it (import / canonicalize) client-side.
+async fn show_html(State(state): State<AppState>, Path(slug): Path<String>) -> Response {
+    let Some(template) = state.index_html.clone() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let html = match show_core_by_slug(&state, &slug).await {
+        Some(core) => {
+            let seasons = db::seasons_with_counts(&state.pool, core.id)
+                .await
+                .unwrap_or_default();
+            let image = state.tmdb.image_url(core.poster_path.as_deref(), "w500");
+            seo::show_page(&template, &state.auth.base_url, &core, &seasons, image)
+        }
+        None => template.as_str().to_string(),
+    };
+    html_response(html)
+}
+
+/// `GET /shows/{slug}/skip-guide` — server-rendered skip guide (the watch/skip
+/// lists as real content) for crawlers; the SPA hydrates over it.
+async fn skip_guide_html(State(state): State<AppState>, Path(slug): Path<String>) -> Response {
+    let Some(template) = state.index_html.clone() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let html = match show_core_by_slug(&state, &slug).await {
+        Some(core) => {
+            let episodes = db::episodes_with_scores(&state.pool, core.id, None, None)
+                .await
+                .unwrap_or_default();
+            let scored: Vec<ScoredEpisode> = episodes
+                .into_iter()
+                .map(|e| ScoredEpisode {
+                    episode_id: e.id.to_string(),
+                    season_number: e.season_number,
+                    episode_number: e.episode_number,
+                    name: e.name,
+                    filler_votes: e.score.filler_votes,
+                    worth_watching_votes: e.score.worth_watching_votes,
+                    canon_votes: e.score.canon_votes,
+                })
+                .collect();
+            let guide = build_skip_guide(&scored, ContestedHandling::Canon, false);
+            seo::skip_guide_page(&template, &state.auth.base_url, &core, &guide)
+        }
+        None => template.as_str().to_string(),
+    };
+    html_response(html)
+}
+
+/// `GET /sitemap.xml` — generated from the catalog: stable routes + every show.
+async fn sitemap(State(state): State<AppState>) -> Response {
+    let slugs = db::all_show_slugs(&state.pool).await.unwrap_or_default();
+    let xml = seo::sitemap_xml(&state.auth.base_url, &slugs);
+    (
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/xml; charset=utf-8",
+            ),
+            (axum::http::header::CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        xml,
+    )
+        .into_response()
 }
 
 #[derive(Debug, Deserialize)]

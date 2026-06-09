@@ -101,6 +101,14 @@ pub async fn find_show_id_by_slug(pool: &PgPool, slug: &str) -> Result<Option<Uu
     Ok(row)
 }
 
+/// Every show's slug, for the sitemap. Ordered by name for a stable listing.
+pub async fn all_show_slugs(pool: &PgPool) -> Result<Vec<String>, sqlx::Error> {
+    let slugs = sqlx::query_scalar!("SELECT slug FROM show ORDER BY name")
+        .fetch_all(pool)
+        .await?;
+    Ok(slugs)
+}
+
 /// Map a set of TMDB ids to the ones we already have imported.
 pub async fn imported_show_ids(
     pool: &PgPool,
