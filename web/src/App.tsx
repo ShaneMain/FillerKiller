@@ -6,6 +6,8 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { SearchPage } from "./pages/SearchPage";
 import { ShowPage } from "./pages/ShowPage";
 import { SkipGuidePage } from "./pages/SkipGuidePage";
+import { GuideDetailPage } from "./pages/GuideDetailPage";
+import { GuideEditorPage } from "./pages/GuideEditorPage";
 import { LoginPage } from "./pages/LoginPage";
 import { AccountPage } from "./pages/AccountPage";
 import { AboutPage } from "./pages/AboutPage";
@@ -32,6 +34,9 @@ export default function App() {
                 <Route path="/terms" element={<TermsPage />} />
                 <Route path="/shows/:id" element={<ShowPage />} />
                 <Route path="/shows/:id/skip-guide" element={<SkipGuidePage />} />
+                <Route path="/shows/:id/guides/new" element={<GuideEditorPage />} />
+                <Route path="/shows/:id/guides/:guideId/edit" element={<GuideEditorPage />} />
+                <Route path="/shows/:id/guides/:guideId" element={<GuideDetailPage />} />
                 <Route path="*" element={<NotFoundPage />} />
               </Routes>
             </ErrorBoundary>

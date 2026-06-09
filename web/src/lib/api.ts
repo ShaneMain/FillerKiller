@@ -85,6 +85,52 @@ export interface Me {
   displayName: string | null;
 }
 
+export type Disposition = "WATCH" | "OPTIONAL" | "SKIP";
+
+export interface GuideSummary {
+  id: string;
+  title: string;
+  description: string | null;
+  authorName: string | null;
+  likeCount: number;
+  watchCount: number;
+  optionalCount: number;
+  skipCount: number;
+  isPublished: boolean;
+  myLike: boolean;
+  mine: boolean;
+}
+
+export interface GuideEntry {
+  episodeId: string;
+  seasonNumber: number;
+  episodeNumber: number;
+  name: string | null;
+  disposition: Disposition;
+}
+
+export interface GuideDetail {
+  id: string;
+  showId: string;
+  showSlug: string;
+  showName: string;
+  title: string;
+  description: string | null;
+  authorName: string | null;
+  likeCount: number;
+  isPublished: boolean;
+  myLike: boolean;
+  mine: boolean;
+  entries: GuideEntry[];
+}
+
+export interface GuideInput {
+  title: string;
+  description?: string | null;
+  entries: { episodeId: string; disposition: Disposition }[];
+  published: boolean;
+}
+
 export class ApiError extends Error {
   status: number;
   code: string;
@@ -150,6 +196,39 @@ export function removeVote(episodeId: string): Promise<VoteResult> {
 
 export function getMe(): Promise<Me | null> {
   return request(`/me`);
+}
+
+// ---- User-authored skip guides ----
+
+export function listGuides(showId: string): Promise<GuideSummary[]> {
+  return request(`/shows/${encodeURIComponent(showId)}/guides`);
+}
+
+export function getGuide(guideId: string): Promise<GuideDetail> {
+  return request(`/guides/${guideId}`);
+}
+
+export function createGuide(showId: string, input: GuideInput): Promise<{ id: string }> {
+  return request(`/shows/${encodeURIComponent(showId)}/guides`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateGuide(guideId: string, input: GuideInput): Promise<void> {
+  return request(`/guides/${guideId}`, { method: "PUT", body: JSON.stringify(input) });
+}
+
+export function deleteGuide(guideId: string): Promise<void> {
+  return request(`/guides/${guideId}`, { method: "DELETE" });
+}
+
+export function likeGuide(guideId: string): Promise<{ likeCount: number; myLike: boolean }> {
+  return request(`/guides/${guideId}/like`, { method: "PUT" });
+}
+
+export function unlikeGuide(guideId: string): Promise<{ likeCount: number; myLike: boolean }> {
+  return request(`/guides/${guideId}/like`, { method: "DELETE" });
 }
 
 export function logout(): Promise<void> {
