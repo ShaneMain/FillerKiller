@@ -26,6 +26,9 @@ pub struct Config {
     /// Max TMDB import-on-demand fan-outs per instance per minute (caps outbound
     /// load from the unauthenticated import path).
     pub import_rate_per_minute: u32,
+    /// Max `/api/search` requests per client IP per minute (each one proxies an
+    /// outbound TMDB call on our token).
+    pub search_rate_per_minute: u32,
     /// Refresh cadence for a RECENT show (latest episode within ~2 years): how
     /// long its cache is fresh before a viewed show is re-synced in the
     /// background. The refresh itself is incremental (only new/grown seasons).
@@ -95,6 +98,9 @@ impl Config {
             import_rate_per_minute: optional("IMPORT_RATE_PER_MINUTE", "20")
                 .parse()
                 .unwrap_or(20),
+            search_rate_per_minute: optional("SEARCH_RATE_PER_MINUTE", "30")
+                .parse()
+                .unwrap_or(30),
             refresh_ttl_hours: optional("REFRESH_TTL_HOURS", "72").parse().unwrap_or(72),
             refresh_ttl_hours_ended: optional("REFRESH_TTL_HOURS_ENDED", "360")
                 .parse()
@@ -158,7 +164,20 @@ fn bind_addr_from_env() -> String {
 /// `AUTH_COOKIE_SECURE` overrides (e.g. to test HTTPS behaviour locally).
 fn cookie_secure(base_url: &str) -> bool {
     match std::env::var("AUTH_COOKIE_SECURE") {
-        Ok(v) if !v.trim().is_empty() => v.trim() == "true",
+        Ok(v) if !v.trim().is_empty() => {
+            let secure = v.trim() == "true";
+            // An explicit `false` on an HTTPS deploy is almost certainly a
+            // copy-pasted dev override — it ships the session cookie without
+            // `Secure` (and without the `__Host-` prefix). Boot anyway (it may
+            // be a deliberate test), but say so loudly.
+            if !secure && base_url.starts_with("https://") {
+                tracing::warn!(
+                    "AUTH_COOKIE_SECURE=false while AUTH_BASE_URL is https — session \
+                     cookies will NOT be marked Secure; remove the override in production"
+                );
+            }
+            secure
+        }
         _ => base_url.starts_with("https://"),
     }
 }

@@ -1,10 +1,12 @@
 # Caddy reverse proxy + static SPA host. Automatic HTTPS for {$DOMAIN}.
-# API and SPA are served same-origin so the SameSite=Lax session cookie works.
+# API and SPA are served same-origin so the session cookie works.
 
 {$DOMAIN} {
 	encode gzip
 
-	# API + health endpoints -> the Rust service.
+	# API + health endpoints -> the Rust service. The API sets its own security
+	# headers (incl. Cache-Control) per response, so don't add the static block's
+	# headers here.
 	@api path /api/* /health /health/*
 	handle @api {
 		reverse_proxy api:8080
@@ -12,6 +14,18 @@
 
 	# Everything else -> the static SPA (SPA-routing fallback to index.html).
 	handle {
+		# Security headers for SPA shell + assets. The Rust API applies the same
+		# set to its own responses; Caddy serves these static files directly, so
+		# they'd otherwise ship with NO CSP/HSTS/frame protection. Keep in sync
+		# with `security_headers` in api/src/main.rs.
+		header {
+			Content-Security-Policy "default-src 'self'; img-src 'self' https://image.tmdb.org data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+			X-Content-Type-Options "nosniff"
+			X-Frame-Options "DENY"
+			Referrer-Policy "strict-origin-when-cross-origin"
+			Strict-Transport-Security "max-age=63072000; includeSubDomains"
+			-Server
+		}
 		root * /srv/web
 		try_files {path} /index.html
 		file_server

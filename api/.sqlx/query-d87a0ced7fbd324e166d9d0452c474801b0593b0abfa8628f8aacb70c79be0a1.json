@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT slug, last_synced_at FROM show ORDER BY name",
+  "query": "SELECT slug, last_synced_at FROM show ORDER BY name LIMIT 20000",
   "describe": {
     "columns": [
       {
@@ -22,5 +22,5 @@
       false
     ]
   },
-  "hash": "5d64f7b4ca8f26bd67843ebb8ae2a102b596095988d3ccdf1bcbd1a043cbc101"
+  "hash": "d87a0ced7fbd324e166d9d0452c474801b0593b0abfa8628f8aacb70c79be0a1"
 }

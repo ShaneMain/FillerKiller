@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM episode old\n        USING jsonb_to_recordset($2) AS e(\n            tmdb_id bigint, season_number int, episode_number int\n        )\n        WHERE old.show_id = $1\n          AND old.season_number = e.season_number\n          AND old.episode_number = e.episode_number\n          AND old.tmdb_id <> e.tmdb_id\n          AND old.tmdb_id NOT IN (\n              SELECT (x->>'tmdb_id')::bigint FROM jsonb_array_elements($2) x\n          )\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f5dbbe55ccc2ada47810f73afab8ff9d97db719573b0a85a7002d1de31197517"
+}

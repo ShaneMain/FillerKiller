@@ -60,6 +60,9 @@ pub struct AppState {
     pub rate_limiter: Arc<IpRateLimiter>,
     /// Per-user vote rate limiter, keyed on the verified JWT user id (unspoofable).
     pub user_rate_limiter: Arc<UserRateLimiter>,
+    /// Per-IP limiter on `/api/search`: every search proxies an outbound TMDB
+    /// call on our token, so bound how fast any one client can burn that budget.
+    pub search_limiter: Arc<IpRateLimiter>,
     /// Global (per-instance) limiter on TMDB import-on-demand. The import path is
     /// unauthenticated and fans out several upstream calls, so bound how often a
     /// fresh show can be imported to cap the outbound load any traffic can induce.
@@ -145,6 +148,7 @@ async fn main() -> anyhow::Result<()> {
         auth: Arc::new(config.auth.clone()),
         rate_limiter: rate_limit::ip_limiter(config.vote_rate_per_minute),
         user_rate_limiter: rate_limit::user_limiter(config.vote_rate_per_minute),
+        search_limiter: rate_limit::ip_limiter(config.search_rate_per_minute),
         import_limiter: rate_limit::direct_limiter(config.import_rate_per_minute),
         index_html,
         refresh_ttl_hours: config.refresh_ttl_hours,
@@ -156,12 +160,14 @@ async fn main() -> anyhow::Result<()> {
     {
         let ip = state.rate_limiter.clone();
         let user = state.user_rate_limiter.clone();
+        let search = state.search_limiter.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(300));
             loop {
                 tick.tick().await;
                 ip.retain_recent();
                 user.retain_recent();
+                search.retain_recent();
             }
         });
     }
@@ -175,10 +181,19 @@ async fn main() -> anyhow::Result<()> {
             rate_limit::limit_votes,
         ));
 
+    // Search proxies TMDB (one outbound call per request on our token), so it
+    // carries its own per-IP limiter.
+    let search_routes = Router::new()
+        .route("/api/search", get(search))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            rate_limit::limit_search,
+        ));
+
     let mut app = Router::new()
         .route("/health", get(health))
         .route("/health/db", get(health_db))
-        .route("/api/search", get(search))
+        .merge(search_routes)
         .route("/api/shows/{id}", get(get_show))
         .route("/api/shows/{id}/episodes", get(get_show_episodes))
         .route("/api/shows/{id}/skip-guide", get(get_skip_guide))
@@ -976,9 +991,12 @@ async fn oauth_callback(
     // The provider can bounce back with ?error= (e.g. user denied consent) and
     // no code. Send the browser back to the SPA with a generic failure flag
     // (the real reason is logged, not reflected, to avoid URL injection).
+    let secure = state.auth.cookie_secure;
     if let Some(err) = params.error.as_deref() {
         tracing::info!("oauth callback error from {provider}: {err}");
-        let jar = jar.remove(auth::STATE_COOKIE).remove(auth::NEXT_COOKIE);
+        let jar = jar
+            .add(auth::clear_cookie(auth::state_cookie_name(secure), secure))
+            .add(auth::clear_cookie(auth::next_cookie_name(secure), secure));
         let url = format!("{}?auth_error=signin_failed", state.auth.web_post_login_url);
         return Ok((jar, Redirect::to(&url)).into_response());
     }
@@ -992,7 +1010,7 @@ async fn oauth_callback(
 
     // CSRF: the state cookie we set at login must match the returned state.
     let expected = jar
-        .get(auth::STATE_COOKIE)
+        .get(auth::state_cookie_name(secure))
         .map(|c| c.value().to_string())
         .ok_or_else(|| AppError::BadRequest("missing OAuth state".into()))?;
     if expected != returned_state {
@@ -1008,11 +1026,25 @@ async fn oauth_callback(
     let session = async {
         let access_token = p.exchange_code(&state.http, &code, &redirect_uri).await?;
         let user = p.fetch_user(&state.http, &access_token).await?;
-        let user_id =
-            db::upsert_user_by_email(&state.pool, &user.email, user.name.as_deref()).await?;
+        // Identity is keyed on the provider's stable subject id, never the
+        // email alone — see `db::resolve_oauth_user`.
+        let (user_id, ver) = db::resolve_oauth_user(
+            &state.pool,
+            p.kind.as_str(),
+            &user.subject,
+            &user.email,
+            user.name.as_deref(),
+        )
+        .await?;
         // Honour a previously-set screen name over the OAuth profile name.
         let display = db::effective_display_name(&state.pool, user_id).await?;
-        auth::issue_jwt(&state.auth.jwt_secret, user_id, &user.email, display.as_deref())
+        auth::issue_jwt(
+            &state.auth.jwt_secret,
+            user_id,
+            &db::normalize_email(&user.email),
+            display.as_deref(),
+            ver,
+        )
     }
     .await;
 
@@ -1020,21 +1052,26 @@ async fn oauth_callback(
         Ok(token) => token,
         Err(e) => {
             tracing::warn!("oauth callback failed for {provider}: {e:?}");
-            let jar = jar.remove(auth::STATE_COOKIE).remove(auth::NEXT_COOKIE);
+            let jar = jar
+                .add(auth::clear_cookie(auth::state_cookie_name(secure), secure))
+                .add(auth::clear_cookie(auth::next_cookie_name(secure), secure));
             let url = format!("{}?auth_error=signin_failed", state.auth.web_post_login_url);
             return Ok((jar, Redirect::to(&url)).into_response());
         }
     };
 
     // Return the user to where they started (the validated `next` cookie), else home.
-    let dest = match jar.get(auth::NEXT_COOKIE).and_then(|c| safe_next(c.value())) {
+    let dest = match jar
+        .get(auth::next_cookie_name(secure))
+        .and_then(|c| safe_next(c.value()))
+    {
         Some(path) => format!("{}{}", state.auth.web_post_login_url.trim_end_matches('/'), path),
         None => state.auth.web_post_login_url.clone(),
     };
     let jar = jar
-        .remove(auth::STATE_COOKIE)
-        .remove(auth::NEXT_COOKIE)
-        .add(auth::session_cookie(token, state.auth.cookie_secure));
+        .add(auth::clear_cookie(auth::state_cookie_name(secure), secure))
+        .add(auth::clear_cookie(auth::next_cookie_name(secure), secure))
+        .add(auth::session_cookie(token, secure));
     Ok((jar, Redirect::to(&dest)).into_response())
 }
 
@@ -1073,7 +1110,13 @@ async fn update_me(
         }
     }
     let display = db::set_screen_name(&state.pool, user.id, screen).await?;
-    let token = auth::issue_jwt(&state.auth.jwt_secret, user.id, &user.email, display.as_deref())?;
+    let token = auth::issue_jwt(
+        &state.auth.jwt_secret,
+        user.id,
+        &user.email,
+        display.as_deref(),
+        user.token_version,
+    )?;
     let jar = jar.add(auth::session_cookie(token, state.auth.cookie_secure));
     Ok((
         jar,
@@ -1082,7 +1125,8 @@ async fn update_me(
         .into_response())
 }
 
-/// `GET /api/me` — current user, decoded from the cookie (no DB read).
+/// `GET /api/me` — current user, decoded from the cookie (plus the extractor's
+/// revocation check, so a deleted/logged-out-everywhere account reads as null).
 async fn me(OptionalUser(user): OptionalUser) -> impl IntoResponse {
     match user {
         Some(u) => Json(json!({ "id": u.id, "email": u.email, "displayName": u.name })),
@@ -1092,7 +1136,9 @@ async fn me(OptionalUser(user): OptionalUser) -> impl IntoResponse {
 
 /// `DELETE /api/me` — permanently delete the caller's account. Auth required.
 /// The user's votes are retained but anonymized (the `vote.user_id` FK is
-/// `ON DELETE SET NULL`), so community totals stay intact. Clears the session.
+/// `ON DELETE SET NULL`), so community totals stay intact. Clears the session;
+/// any *other* outstanding tokens die with the row (the extractor's
+/// token_version lookup finds no user).
 async fn delete_me(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -1103,10 +1149,20 @@ async fn delete_me(
     Ok((jar, StatusCode::NO_CONTENT).into_response())
 }
 
-/// `POST /api/auth/logout` — clear the session cookie.
-async fn logout(State(state): State<AppState>, jar: CookieJar) -> impl IntoResponse {
+/// `POST /api/auth/logout` — clear the session cookie AND bump the user's
+/// token_version, revoking every outstanding session (a stateless JWT can't be
+/// revoked individually, and "I'm done / I suspect theft" both want all of them
+/// dead). Still clears the cookie when the session is already invalid.
+async fn logout(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+    jar: CookieJar,
+) -> Result<Response, AppError> {
+    if let Some(u) = user {
+        db::bump_token_version(&state.pool, u.id).await?;
+    }
     let jar = jar.add(auth::clear_session_cookie(state.auth.cookie_secure));
-    (jar, StatusCode::NO_CONTENT)
+    Ok((jar, StatusCode::NO_CONTENT).into_response())
 }
 
 #[cfg(test)]

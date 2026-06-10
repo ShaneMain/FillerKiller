@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT s.slug AS show_slug, g.id, g.updated_at\n           FROM skip_guide g\n           JOIN show s ON s.id = g.show_id\n           WHERE g.is_published\n           ORDER BY g.updated_at DESC",
+  "query": "SELECT s.slug AS show_slug, g.id, g.updated_at\n           FROM skip_guide g\n           JOIN show s ON s.id = g.show_id\n           WHERE g.is_published\n           ORDER BY g.updated_at DESC\n           LIMIT 9000",
   "describe": {
     "columns": [
       {
@@ -28,5 +28,5 @@
       false
     ]
   },
-  "hash": "7fcbda70722d32476f7cfca2898f0da5c4605df82aa33dd20e54b3678f5e962b"
+  "hash": "9dc9d87fac24d6b8d5181e6953e35641b560e2bd31f067f5fe14dfeda7911939"
 }

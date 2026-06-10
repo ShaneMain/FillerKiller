@@ -117,7 +117,7 @@ pub async fn refresh_show(tmdb: &TmdbClient, pool: &PgPool, tmdb_id: i64) -> Res
     for (season, full) in &fetched {
         let season_id =
             db::upsert_season(&mut *tx, show_id, season.season_number, Some(&season.name)).await?;
-        write_episodes(&mut *tx, show_id, season_id, &full.episodes).await?;
+        write_episodes(&mut tx, show_id, season_id, &full.episodes).await?;
     }
     tx.commit().await?;
     if !fetched.is_empty() {
@@ -181,7 +181,7 @@ pub async fn import_show(tmdb: &TmdbClient, pool: &PgPool, tmdb_id: i64) -> Resu
     for (season, full) in &seasons {
         let season_id =
             db::upsert_season(&mut *tx, show_id, season.season_number, Some(&season.name)).await?;
-        write_episodes(&mut *tx, show_id, season_id, &full.episodes).await?;
+        write_episodes(&mut tx, show_id, season_id, &full.episodes).await?;
     }
     tx.commit().await?;
 
@@ -190,10 +190,10 @@ pub async fn import_show(tmdb: &TmdbClient, pool: &PgPool, tmdb_id: i64) -> Resu
     Ok(show_id)
 }
 
-/// Bulk-upsert a season's episodes (one statement) by encoding them as a JSONB
-/// array. A no-op for an empty season. Empty TMDB air dates become null.
+/// Bulk-upsert a season's episodes (constant statement count) by encoding them
+/// as a JSONB array. A no-op for an empty season. Empty TMDB air dates become null.
 async fn write_episodes(
-    executor: impl sqlx::PgExecutor<'_>,
+    conn: &mut sqlx::PgConnection,
     show_id: Uuid,
     season_id: Uuid,
     episodes: &[crate::tmdb::TmdbEpisode],
@@ -217,7 +217,7 @@ async fn write_episodes(
             })
         })
         .collect();
-    db::upsert_episodes(executor, show_id, season_id, &serde_json::Value::Array(rows)).await?;
+    db::upsert_episodes(conn, show_id, season_id, &serde_json::Value::Array(rows)).await?;
     Ok(())
 }
 

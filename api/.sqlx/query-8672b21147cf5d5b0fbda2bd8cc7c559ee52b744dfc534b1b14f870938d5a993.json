@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE app_user SET\n                display_name = $2,\n                email = CASE WHEN NOT EXISTS (\n                    SELECT 1 FROM app_user other WHERE lower(other.email) = $3 AND other.id <> app_user.id\n                ) THEN $3 ELSE email END\n            WHERE id = $1\n            RETURNING token_version\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "token_version",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8672b21147cf5d5b0fbda2bd8cc7c559ee52b744dfc534b1b14f870938d5a993"
+}

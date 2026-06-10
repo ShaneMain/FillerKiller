@@ -167,10 +167,15 @@ pub struct SitemapShow {
 }
 
 /// Every show, for the sitemap, with a freshness timestamp. Ordered by name.
+///
+/// Bounded: each show emits two sitemap URLs, and the sitemap protocol caps a
+/// file at 50k URLs — when the catalog approaches the limit, switch to a
+/// sitemap index. The cap also keeps this unauthenticated endpoint from
+/// materializing an unbounded response.
 pub async fn sitemap_shows(pool: &PgPool) -> Result<Vec<SitemapShow>, sqlx::Error> {
     let rows = sqlx::query_as!(
         SitemapShow,
-        "SELECT slug, last_synced_at FROM show ORDER BY name"
+        "SELECT slug, last_synced_at FROM show ORDER BY name LIMIT 20000"
     )
     .fetch_all(pool)
     .await?;
@@ -185,7 +190,8 @@ pub struct SitemapGuide {
 }
 
 /// Every published user guide, joined to its show's slug, for the sitemap.
-/// Drafts are excluded — they're not crawlable.
+/// Drafts are excluded — they're not crawlable. Bounded like `sitemap_shows`
+/// (newest guides win the budget).
 pub async fn sitemap_guides(pool: &PgPool) -> Result<Vec<SitemapGuide>, sqlx::Error> {
     let rows = sqlx::query_as!(
         SitemapGuide,
@@ -193,7 +199,8 @@ pub async fn sitemap_guides(pool: &PgPool) -> Result<Vec<SitemapGuide>, sqlx::Er
            FROM skip_guide g
            JOIN show s ON s.id = g.show_id
            WHERE g.is_published
-           ORDER BY g.updated_at DESC"#
+           ORDER BY g.updated_at DESC
+           LIMIT 9000"#
     )
     .fetch_all(pool)
     .await?;
@@ -305,12 +312,6 @@ pub async fn upsert_season(
     Ok(id)
 }
 
-// NOTE (known gap): `episode` has two unique constraints — `tmdb_id` and
-// `(show_id, season_number, episode_number)`. This upsert handles conflicts on
-// `tmdb_id` only. On a *re-import* where TMDB has renumbered an episode into a
-// slot already held by a different row, the second constraint can raise a unique
-// violation. First-import of a fresh show cannot hit this. Resolve alongside the
-// TTL-refresh feature — e.g. delete-then-insert within the import tx.
 // Single-episode upsert, retained for tests (the import/refresh path uses the
 // bulk `upsert_episodes`).
 #[allow(clippy::too_many_arguments, dead_code)]
@@ -360,16 +361,47 @@ pub async fn upsert_episode(
     Ok(())
 }
 
-/// Bulk-upsert a season's episodes in ONE statement (a single DB round-trip
-/// instead of one per episode) — the import/refresh hot path. `episodes` is a
-/// JSONB array of objects with the columns below (nulls allowed); conflicts on
-/// `tmdb_id` update the mutable fields.
+/// Bulk-upsert a season's episodes in TWO statements (constant DB round-trips
+/// regardless of season size) — the import/refresh hot path. `episodes` is a
+/// JSONB array of objects with the columns below (nulls allowed).
+///
+/// Re-import handles TMDB renumbering in two parts:
+/// - A stale row occupying a slot (`show_id, season_number, episode_number`)
+///   now claimed by a *different* tmdb_id, whose own tmdb_id has left the
+///   incoming set, genuinely changed identity — it's deleted first (its votes
+///   go with it).
+/// - A *surviving* episode (same tmdb_id) that TMDB renumbered or shifted is
+///   updated in place via `ON CONFLICT (tmdb_id)`, moving its season/number.
+///   The slot uniqueness constraint is `DEFERRABLE INITIALLY DEFERRED` (see
+///   migration 0011), so the transient duplicate a shift creates mid-statement
+///   is tolerated and only the consistent final state is checked at COMMIT.
+///   Rows are never recreated, so votes (which FK to the episode id) survive.
 pub async fn upsert_episodes(
-    executor: impl sqlx::PgExecutor<'_>,
+    conn: &mut sqlx::PgConnection,
     show_id: Uuid,
     season_id: Uuid,
     episodes: &serde_json::Value,
 ) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        r#"
+        DELETE FROM episode old
+        USING jsonb_to_recordset($2) AS e(
+            tmdb_id bigint, season_number int, episode_number int
+        )
+        WHERE old.show_id = $1
+          AND old.season_number = e.season_number
+          AND old.episode_number = e.episode_number
+          AND old.tmdb_id <> e.tmdb_id
+          AND old.tmdb_id NOT IN (
+              SELECT (x->>'tmdb_id')::bigint FROM jsonb_array_elements($2) x
+          )
+        "#,
+        show_id,
+        episodes,
+    )
+    .execute(&mut *conn)
+    .await?;
+
     sqlx::query!(
         r#"
         INSERT INTO episode (
@@ -384,6 +416,9 @@ pub async fn upsert_episodes(
             tmdb_vote_average float8, tmdb_vote_count int
         )
         ON CONFLICT (tmdb_id) DO UPDATE SET
+            season_id = EXCLUDED.season_id,
+            season_number = EXCLUDED.season_number,
+            episode_number = EXCLUDED.episode_number,
             name = EXCLUDED.name,
             overview = EXCLUDED.overview,
             air_date = EXCLUDED.air_date,
@@ -395,31 +430,134 @@ pub async fn upsert_episodes(
         season_id,
         episodes,
     )
-    .execute(executor)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }
 
-/// Find or create a user by email (the OAuth identity key). Updates
-/// the display name on subsequent logins. Returns our user id.
-pub async fn upsert_user_by_email(
+/// Canonical form for emails: trimmed, lowercased. Applied before every
+/// store/compare so case/whitespace variants of one mailbox can't become
+/// distinct accounts (the DB backstops this with a unique index on
+/// `lower(email)`).
+pub fn normalize_email(email: &str) -> String {
+    email.trim().to_lowercase()
+}
+
+/// Resolve an OAuth login to our user, keyed on the provider's stable subject
+/// id — NOT the email. Returns `(user_id, token_version)`.
+///
+/// Email (normalized) is profile data. It is consulted only on the FIRST login
+/// from a given provider account, to auto-link it to an existing user with the
+/// same address — safe today because both providers hand us only *verified*
+/// emails. Any future provider must verify emails too, or skip this linking
+/// step. After linking, the `(provider, subject)` row is authoritative: an
+/// email change at the provider follows the account instead of forking it.
+pub async fn resolve_oauth_user(
     pool: &PgPool,
+    provider: &str,
+    subject: &str,
     email: &str,
     display_name: Option<&str>,
-) -> Result<Uuid, sqlx::Error> {
-    let id = sqlx::query_scalar!(
-        r#"
-        INSERT INTO app_user (email, display_name)
-        VALUES ($1, $2)
-        ON CONFLICT (email) DO UPDATE SET display_name = EXCLUDED.display_name
-        RETURNING id
-        "#,
-        email,
-        display_name,
+) -> Result<(Uuid, i32), sqlx::Error> {
+    let email = normalize_email(email);
+    let mut tx = pool.begin().await?;
+
+    // Known identity → its user. Keep the profile fresh: the OAuth name always
+    // updates; the email updates only if no other account holds the new one
+    // (then we keep the old address rather than fail the login).
+    let known = sqlx::query!(
+        "SELECT user_id FROM oauth_identity WHERE provider = $1 AND subject = $2",
+        provider,
+        subject,
     )
-    .fetch_one(pool)
+    .fetch_optional(&mut *tx)
     .await?;
-    Ok(id)
+    if let Some(row) = known {
+        let ver = sqlx::query_scalar!(
+            r#"
+            UPDATE app_user SET
+                display_name = $2,
+                email = CASE WHEN NOT EXISTS (
+                    SELECT 1 FROM app_user other WHERE lower(other.email) = $3 AND other.id <> app_user.id
+                ) THEN $3 ELSE email END
+            WHERE id = $1
+            RETURNING token_version
+            "#,
+            row.user_id,
+            display_name,
+            email,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        return Ok((row.user_id, ver));
+    }
+
+    // First login from this provider account: link to the existing user with
+    // the same verified email, else create a fresh one. (A concurrent first
+    // login racing this can hit the email/identity unique constraints; the
+    // login fails cleanly and the retry lands in the branch above.)
+    let existing = sqlx::query!(
+        "SELECT id, token_version FROM app_user WHERE lower(email) = $1",
+        email
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (user_id, ver) = match existing {
+        Some(row) => {
+            sqlx::query!(
+                "UPDATE app_user SET display_name = $2 WHERE id = $1",
+                row.id,
+                display_name
+            )
+            .execute(&mut *tx)
+            .await?;
+            (row.id, row.token_version)
+        }
+        None => {
+            let row = sqlx::query!(
+                "INSERT INTO app_user (email, display_name) VALUES ($1, $2) RETURNING id, token_version",
+                email,
+                display_name,
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+            (row.id, row.token_version)
+        }
+    };
+    sqlx::query!(
+        "INSERT INTO oauth_identity (provider, subject, user_id) VALUES ($1, $2, $3)",
+        provider,
+        subject,
+        user_id,
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok((user_id, ver))
+}
+
+/// The user's current token version — the session-revocation check. `None`
+/// means the account no longer exists (its sessions are dead too).
+pub async fn user_token_version(pool: &PgPool, user_id: Uuid) -> Result<Option<i32>, sqlx::Error> {
+    sqlx::query_scalar!(
+        "SELECT token_version FROM app_user WHERE id = $1",
+        user_id
+    )
+    .fetch_optional(pool)
+    .await
+}
+
+/// Invalidate every outstanding session for a user by bumping their token
+/// version (issued JWTs carry the version they were minted with).
+pub async fn bump_token_version(pool: &PgPool, user_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "UPDATE app_user SET token_version = token_version + 1 WHERE id = $1",
+        user_id
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// The effective display name for a user: their chosen screen name, else the
@@ -564,6 +702,10 @@ pub async fn episodes_with_scores(
         LEFT JOIN episode_score es ON es.episode_id = e.id
         WHERE e.show_id = $1 AND ($2::int IS NULL OR e.season_number = $2)
         ORDER BY e.season_number, e.episode_number
+        -- Safety bound, not pagination: above any real show's episode count
+        -- (the longest-running soaps sit under this), it only stops a
+        -- pathological row from producing an unbounded response.
+        LIMIT 20000
         "#,
         show_id,
         season,
@@ -746,8 +888,25 @@ mod tests {
         .unwrap();
         let ep_id = episodes_with_scores(&pool, show, Some(1), None).await.unwrap()[0].id;
 
-        let alice = upsert_user_by_email(&pool, "alice@test.local", Some("Alice")).await.unwrap();
-        let bob = upsert_user_by_email(&pool, "bob@test.local", Some("Bob")).await.unwrap();
+        let (alice, _) = resolve_oauth_user(&pool, "test", "sub-alice", "Alice@Test.local ", Some("Alice"))
+            .await
+            .unwrap();
+        let (bob, _) = resolve_oauth_user(&pool, "test", "sub-bob", "bob@test.local", Some("Bob"))
+            .await
+            .unwrap();
+
+        // Identity is keyed on (provider, subject): the same subject logs into
+        // the same account even if the provider reports a changed email...
+        let (again, _) = resolve_oauth_user(&pool, "test", "sub-alice", "renamed@test.local", None)
+            .await
+            .unwrap();
+        assert_eq!(again, alice);
+        // ...and a DIFFERENT provider asserting Alice's (normalized) email links
+        // to her account rather than forking a new one.
+        let (linked, _) = resolve_oauth_user(&pool, "other", "sub-x", "renamed@test.local", None)
+            .await
+            .unwrap();
+        assert_eq!(linked, alice);
 
         // Trigger maintains the tally on INSERT.
         upsert_vote(&pool, alice, ep_id, "FILLER").await.unwrap();
@@ -769,5 +928,88 @@ mod tests {
         // Deleting Alice keeps her vote (anonymized): the count is unchanged.
         assert_eq!(delete_user(&pool, alice).await.unwrap(), 1);
         assert_eq!(episode_aggregate(&pool, ep_id).await.unwrap(), (0, 1, 0));
+    }
+
+    /// A re-import that renumbers/shifts episodes (matching by stable tmdb_id)
+    /// keeps the rows — and their votes — intact, relying on the deferrable slot
+    /// constraint from migration 0011. A genuinely replaced episode (its tmdb_id
+    /// gone, a new one in its slot) is removed instead.
+    #[cfg(feature = "integration")]
+    #[sqlx::test]
+    async fn reimport_renumber_preserves_votes(pool: sqlx::PgPool) {
+        let show = upsert_show(
+            &pool, 9100, "Renumber Test", "renumber-test", Some(2021), None, None, None, None,
+        )
+        .await
+        .unwrap();
+        let season = upsert_season(&pool, show, 1, Some("Season 1")).await.unwrap();
+
+        // Initial import: three episodes E1(t1), E2(t2), E3(t3).
+        let initial = serde_json::json!([
+            {"tmdb_id": 7001, "season_number": 1, "episode_number": 1, "name": "A"},
+            {"tmdb_id": 7002, "season_number": 1, "episode_number": 2, "name": "B"},
+            {"tmdb_id": 7003, "season_number": 1, "episode_number": 3, "name": "C"},
+        ]);
+        upsert_episodes(&mut pool.acquire().await.unwrap(), show, season, &initial)
+            .await
+            .unwrap();
+
+        // Vote on episode B (tmdb 7002) so we can prove the row survives the shift.
+        let b_id = sqlx::query_scalar!("SELECT id FROM episode WHERE tmdb_id = 7002")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let (carol, _) = resolve_oauth_user(&pool, "test", "sub-carol", "carol@test.local", Some("Carol"))
+            .await
+            .unwrap();
+        upsert_vote(&pool, carol, b_id, "FILLER").await.unwrap();
+
+        // Re-import: a NEW episode (t99) inserts at E2, shifting B→E3 and C→E4.
+        // Surviving episodes keep their tmdb_id, so they're updated in place; the
+        // transient duplicate at E2/E3 is tolerated until COMMIT.
+        let renumbered = serde_json::json!([
+            {"tmdb_id": 7001, "season_number": 1, "episode_number": 1, "name": "A"},
+            {"tmdb_id": 7099, "season_number": 1, "episode_number": 2, "name": "NEW"},
+            {"tmdb_id": 7002, "season_number": 1, "episode_number": 3, "name": "B"},
+            {"tmdb_id": 7003, "season_number": 1, "episode_number": 4, "name": "C"},
+        ]);
+        upsert_episodes(&mut pool.acquire().await.unwrap(), show, season, &renumbered)
+            .await
+            .unwrap();
+
+        // B kept its identity (same row id) and its vote, now at episode 3.
+        let b_after = sqlx::query!(
+            "SELECT id, episode_number FROM episode WHERE tmdb_id = 7002"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(b_after.id, b_id, "renumbered episode kept its row id");
+        assert_eq!(b_after.episode_number, 3);
+        assert_eq!(episode_aggregate(&pool, b_id).await.unwrap(), (1, 0, 0));
+
+        // Now a genuine replacement: t7001 (A) disappears; t7100 takes slot E1.
+        let replaced = serde_json::json!([
+            {"tmdb_id": 7100, "season_number": 1, "episode_number": 1, "name": "REPLACED"},
+            {"tmdb_id": 7099, "season_number": 1, "episode_number": 2, "name": "NEW"},
+            {"tmdb_id": 7002, "season_number": 1, "episode_number": 3, "name": "B"},
+            {"tmdb_id": 7003, "season_number": 1, "episode_number": 4, "name": "C"},
+        ]);
+        upsert_episodes(&mut pool.acquire().await.unwrap(), show, season, &replaced)
+            .await
+            .unwrap();
+        let gone = sqlx::query_scalar!("SELECT EXISTS(SELECT 1 FROM episode WHERE tmdb_id = 7001)")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(gone, Some(false), "vanished episode was deleted");
+        let e1_name = sqlx::query_scalar!(
+            "SELECT name FROM episode WHERE show_id = $1 AND season_number = 1 AND episode_number = 1",
+            show
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(e1_name.as_deref(), Some("REPLACED"));
     }
 }

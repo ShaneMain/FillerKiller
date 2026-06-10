@@ -85,6 +85,18 @@ pub async fn limit_votes(State(state): State<AppState>, req: Request, next: Next
     }
 }
 
+/// Axum middleware: per-IP quota on `/api/search`. Search is unauthenticated and
+/// proxies one outbound TMDB call per request on our token, so without a bound a
+/// single client could burn the whole TMDB budget (degrading import/refresh for
+/// everyone). Same per-instance caveats as the vote limiter above.
+pub async fn limit_search(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    let ip = client_ip(req.headers());
+    match state.search_limiter.check_key(&ip) {
+        Ok(()) => next.run(req).await,
+        Err(_) => AppError::RateLimited.into_response(),
+    }
+}
+
 /// Best-effort client IP from proxy headers. Behind Caddy/Cloudflare the socket
 /// peer is the proxy, so we trust `CF-Connecting-IP` (set by Cloudflare) then the
 /// first `X-Forwarded-For` hop. Unknown → a shared sentinel bucket, so requests

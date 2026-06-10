@@ -4,7 +4,7 @@ Two supported deployments, same app and same standard Postgres — switching is 
 `DATABASE_URL` + target change, no rewrite:
 
 - **[Cloud Run + Neon](#cloud-run--neon-primary)** — ephemeral compute that scales with
-  traffic, fronted by Cloudflare.
+  traffic, with Cloudflare as DNS-only (the request path is Cloud Run direct).
 - **[Self-hosted single box](#self-hosted-single-box-fallback)** — the cheapest flat-cost
   fallback.
 
@@ -48,7 +48,7 @@ Then register each OAuth app's redirect URI as
 `https://<DOMAIN>/api/auth/<provider>/callback`.
 
 The SPA and API are **same-origin** (both behind Caddy at `https://<DOMAIN>`), so the
-`SameSite=Lax` session cookie works without cross-site handling.
+session cookie is first-party and works without cross-site handling.
 
 ## Updating
 
@@ -89,22 +89,34 @@ gunzip -c fillerkiller-YYYYMMDD.sql.gz | \
 
 ## Cloud Run + Neon (primary)
 
-Ephemeral Rust container on Cloud Run + managed Postgres on Neon, fronted by Cloudflare
-(reads scale at the edge; the origin scales to zero). The same `api/Dockerfile` image is
-used — no code change.
+Ephemeral Rust container on Cloud Run + managed Postgres on Neon. The single image
+serves **both** the API and the SPA same-origin (the root `Dockerfile` builds
+`web/dist` into the API image, which serves it as a static fallback) — there is no
+separate SPA host. **Cloudflare is DNS-only** (gray cloud): it answers DNS but is not
+in the request path. TLS and the request both terminate at Cloud Run, via a
+**Cloud Run domain mapping** with a Google-managed certificate.
 
 ```
-internet ──▶ Cloudflare (TLS, CDN cache, rate rules)
-               ├─ /api/*, /health  ──▶ Cloud Run (Rust API)  ──▶ Neon (pooled)
-               └─ everything else  ──▶ static SPA (Cloudflare Pages)
+internet ──▶ Cloud Run domain mapping (Google-managed TLS)
+               └─ one Rust container:
+                    ├─ /api/*, /health  ──▶ Rust API  ──▶ Neon (pooled)
+                    └─ everything else  ──▶ static SPA (web/dist, same image)
+  DNS: Cloudflare (DNS-only / gray cloud) ─ A/AAAA ▶ the domain mapping
 ```
+
+> Why not proxy through Cloudflare? Cloud Run 404s on an unrecognized `Host`, and the
+> Cloudflare **Free** plan can't rewrite the Host header, so an orange-cloud proxy needs
+> a Worker or a paid plan. We run DNS-only for now; edge caching / a global rate-limit
+> rule can be layered on later behind a Worker. The in-API limiters (per-IP votes,
+> per-IP search, per-instance import) are the current controls.
 
 ### Prerequisites
 
 - `gcloud` CLI authenticated; a GCP project with Cloud Run + Artifact Registry enabled.
 - A **Neon** project. Copy its **pooled** connection string (host has `-pooler`):
   `postgresql://USER:PASS@ep-xxx-pooler.REGION.aws.neon.tech/neondb?sslmode=require`.
-- TMDB read token; Google/GitHub OAuth apps; a domain on Cloudflare.
+- TMDB read token; Google/GitHub OAuth apps; a domain whose DNS is on Cloudflare
+  (DNS-only — the domain is verified to Google and pointed straight at Cloud Run).
 - Two service accounts (set up already): a **runtime** SA the service runs as
   (granted `secretAccessor` on the secrets only) and a **build** SA Cloud Build
   uses (build/push/deploy roles only). The default compute SA has **no roles**,
@@ -136,7 +148,10 @@ gcloud run jobs execute fillerkiller-migrate --region $REGION --wait
 ```
 
 > The job needs `DATABASE_URL` and the config's required vars to start; `migrate` only
-> touches the DB. Locally you can equivalently run `DATABASE_URL=… cargo run -- migrate`.
+> touches the DB. The `AUTH_JWT_SECRET=$(openssl rand -base64 32)` here is a **throwaway**
+> just to satisfy config validation — it signs nothing and is discarded with the job; it
+> is NOT the production signing secret (that's `fk-jwt` in Secret Manager). Locally you
+> can equivalently run `DATABASE_URL=… cargo run -- migrate`.
 
 ### 2. Deploy the API
 
@@ -160,18 +175,32 @@ Notes:
 - Put real secrets in **Secret Manager** (`--set-secrets`), not `--set-env-vars`.
 - Use the Neon **pooled** string; the `sqlx` pool is already kept small + lazy.
 
-### 3. Front with Cloudflare
+### 3. Map the domain (Cloudflare DNS-only)
 
-1. Add `$DOMAIN` to Cloudflare; proxy (orange-cloud) on — it terminates TLS and caches.
-2. Route **same-origin** so the `SameSite=Lax` cookie works: `/api/*` and `/health` →
-   the Cloud Run service URL (an origin rule / Worker), everything else → the static SPA.
-3. Host the SPA: `cd web && npm run build`, deploy `web/dist` to **Cloudflare Pages**
-   (same zone as `$DOMAIN`).
-4. Cloudflare **respects the API's `Cache-Control`**, so catalog reads cache long and
-   aggregates cache briefly automatically. Add a **rate-limiting rule** on
-   `/api/episodes/*/vote` (methods `PUT` and `DELETE`) — the authoritative per-IP limit
-   (the in-API limiter is only defense in depth).
-5. Register each OAuth redirect URI as `https://$DOMAIN/api/auth/<provider>/callback`.
+The SPA is already served same-origin by the API image (step 2), so there is no
+separate SPA host to deploy. Point the domain straight at Cloud Run:
+
+1. **Verify the domain to Google** (one-time, interactive): `gcloud domains verify
+   $DOMAIN` opens Search Console → add `$DOMAIN` as a **Domain property** → it gives a
+   `google-site-verification=...` TXT record → add that TXT in Cloudflare DNS → click
+   Verify. Confirm with `gcloud domains list-user-verified`.
+2. **Create the mapping** and read back its DNS targets:
+   ```bash
+   gcloud beta run domain-mappings create --service fillerkiller-api \
+     --domain $DOMAIN --region $REGION
+   gcloud beta run domain-mappings describe --domain $DOMAIN --region $REGION \
+     --format="value(status.resourceRecords)"   # the A/AAAA (apex) or CNAME (subdomain)
+   ```
+3. **Add those records in Cloudflare as DNS-only (gray cloud, `proxied: false`).** An
+   orange-cloud proxy would break TLS/Host (see the note above). `.app` is
+   HSTS-preloaded (HTTPS-only), so nothing loads until the Google-managed cert reports
+   `Ready` — watch the `describe` output.
+4. Register each OAuth redirect URI as `https://$DOMAIN/api/auth/<provider>/callback`.
+
+> Edge caching / a global rate-limit rule are **not** in place in this DNS-only setup;
+> the API's own `Cache-Control` still applies at the browser, and the in-API limiters
+> are the rate controls. To add a Cloudflare edge later, front the mapping with a
+> Worker (or a paid plan that can rewrite the Host header) and switch to orange-cloud.
 
 ### 4. Recompute job + backups (scheduled)
 

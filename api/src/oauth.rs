@@ -59,8 +59,11 @@ pub struct ProviderConfig {
     pub client_secret: String,
 }
 
-/// The identity we care about from a provider.
+/// The identity we care about from a provider. `subject` is the provider's
+/// stable user id (Google `sub`, GitHub numeric `id`) — the durable identity
+/// key. Email is profile data: verified, but changeable at the provider.
 pub struct OAuthUser {
+    pub subject: String,
     pub email: String,
     pub name: Option<String>,
 }
@@ -145,6 +148,7 @@ impl ProviderConfig {
             .map_err(|e| upstream_err("google userinfo decode", e))?;
         match info.email {
             Some(email) if info.email_verified.unwrap_or(false) => Ok(OAuthUser {
+                subject: info.sub,
                 email,
                 name: info.name,
             }),
@@ -189,6 +193,7 @@ impl ProviderConfig {
             .ok_or_else(|| AppError::Upstream("your GitHub account has no verified email".into()))?;
 
         Ok(OAuthUser {
+            subject: user.id.to_string(),
             email,
             name: user.name,
         })
@@ -202,6 +207,8 @@ struct TokenResponse {
 
 #[derive(Debug, Deserialize)]
 struct GoogleUserinfo {
+    /// Google's stable account id — the OIDC subject.
+    sub: String,
     email: Option<String>,
     email_verified: Option<bool>,
     name: Option<String>,
@@ -209,6 +216,8 @@ struct GoogleUserinfo {
 
 #[derive(Debug, Deserialize)]
 struct GithubUser {
+    /// GitHub's stable numeric account id (logins can be renamed; this can't).
+    id: i64,
     name: Option<String>,
 }
 

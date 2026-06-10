@@ -564,8 +564,14 @@ mod tests {
             .unwrap();
         }
         let eps = db::episodes_with_scores(&pool, show, Some(1), None).await.unwrap();
-        let author = db::upsert_user_by_email(&pool, "author@test.local", Some("Author")).await.unwrap();
-        let liker = db::upsert_user_by_email(&pool, "liker@test.local", Some("Liker")).await.unwrap();
+        let (author, _) =
+            db::resolve_oauth_user(&pool, "test", "sub-author", "author@test.local", Some("Author"))
+                .await
+                .unwrap();
+        let (liker, _) =
+            db::resolve_oauth_user(&pool, "test", "sub-liker", "liker@test.local", Some("Liker"))
+                .await
+                .unwrap();
 
         let input = |title: &str, published: bool| GuideInput {
             title: title.into(),

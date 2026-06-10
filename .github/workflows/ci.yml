@@ -5,6 +5,12 @@ on:
     branches: [master]
   pull_request:
 
+# CI only reads the code, builds, and tests — it needs no write access. Pinning
+# the token to read-only means a malicious fork PR can't use it to push or
+# tamper, now that the repo is public.
+permissions:
+  contents: read
+
 jobs:
   api:
     name: API (Rust)
@@ -32,17 +38,21 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Third-party actions are pinned to full commit SHAs (not mutable tags) so
+      # a compromised upstream tag can't silently run new code in CI. The
+      # trailing comment records the human-readable version each SHA maps to.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
+          toolchain: stable
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
         with:
           workspaces: api
       - run: cargo build --locked
       - run: cargo clippy --all-targets --features integration -- -D warnings
       - run: cargo test --features integration
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@0631aa6515c7d545823c67cfae7ef4fc7f490154 # v2.81.8
         with:
           tool: cargo-audit
       # RUSTSEC-2023-0071 (rsa "Marvin attack"): pulled in transitively via sqlx's
@@ -58,8 +68,8 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: npm

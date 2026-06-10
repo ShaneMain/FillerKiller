@@ -1,5 +1,6 @@
 import { Link, useSearchParams } from "react-router-dom";
 import { loginUrl } from "../lib/api";
+import { isSafeNext } from "../lib/loginNav";
 import { useAuth } from "../lib/auth";
 import { usePageMeta } from "../lib/meta";
 import { Wordmark } from "../components/Wordmark";
@@ -8,7 +9,10 @@ export function LoginPage() {
   usePageMeta("Sign in", "Sign in to FillerKiller to vote on episodes.");
   const { user } = useAuth();
   const [params] = useSearchParams();
-  const next = params.get("next") ?? undefined;
+  // Drop an off-site `next` before it reaches the login URL (the server also
+  // re-validates it; this stops the client forwarding a hostile value at all).
+  const rawNext = params.get("next");
+  const next = rawNext && isSafeNext(rawNext) ? rawNext : undefined;
 
   return (
     <div className="mx-auto max-w-sm px-4 py-12">
