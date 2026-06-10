@@ -4,7 +4,7 @@ Two supported deployments, same app and same standard Postgres — switching is 
 `DATABASE_URL` + target change, no rewrite:
 
 - **[Cloud Run + Neon](#cloud-run--neon-primary)** — ephemeral compute that scales with
-  traffic, with Cloudflare as DNS-only (the request path is Cloud Run direct).
+  traffic, fronted by Cloudflare (orange-cloud proxy → Cloud Run domain mapping).
 - **[Self-hosted single box](#self-hosted-single-box-fallback)** — the cheapest flat-cost
   fallback.
 
@@ -89,34 +89,37 @@ gunzip -c fillerkiller-YYYYMMDD.sql.gz | \
 
 ## Cloud Run + Neon (primary)
 
-Ephemeral Rust container on Cloud Run + managed Postgres on Neon. The single image
-serves **both** the API and the SPA same-origin (the root `Dockerfile` builds
-`web/dist` into the API image, which serves it as a static fallback) — there is no
-separate SPA host. **Cloudflare is DNS-only** (gray cloud): it answers DNS but is not
-in the request path. TLS and the request both terminate at Cloud Run, via a
-**Cloud Run domain mapping** with a Google-managed certificate.
+Ephemeral Rust container on Cloud Run + managed Postgres on Neon, fronted by
+Cloudflare. The single image serves **both** the API and the SPA same-origin (the
+root `Dockerfile` builds `web/dist` into the API image, which serves it as a static
+fallback) — there is **no** separate SPA host (not Cloudflare Pages). Cloudflare
+proxies (orange-cloud) to a **Cloud Run domain mapping**: the mapping makes Cloud
+Run accept the custom `Host` (it 404s on an unrecognized one), so the proxy can sit
+in front for TLS + edge caching.
 
 ```
-internet ──▶ Cloud Run domain mapping (Google-managed TLS)
-               └─ one Rust container:
-                    ├─ /api/*, /health  ──▶ Rust API  ──▶ Neon (pooled)
-                    └─ everything else  ──▶ static SPA (web/dist, same image)
-  DNS: Cloudflare (DNS-only / gray cloud) ─ A/AAAA ▶ the domain mapping
+internet ──▶ Cloudflare (orange-cloud: TLS, CDN cache, respects Cache-Control)
+               └─▶ Cloud Run domain mapping (fillerkiller.app)
+                     └─ one Rust container:
+                          ├─ /api/*, /health  ──▶ Rust API  ──▶ Neon (pooled)
+                          └─ everything else  ──▶ static SPA (web/dist, same image)
 ```
 
-> Why not proxy through Cloudflare? Cloud Run 404s on an unrecognized `Host`, and the
-> Cloudflare **Free** plan can't rewrite the Host header, so an orange-cloud proxy needs
-> a Worker or a paid plan. We run DNS-only for now; edge caching / a global rate-limit
-> rule can be layered on later behind a Worker. The in-API limiters (per-IP votes,
-> per-IP search, per-instance import) are the current controls.
+> The Cloud Run domain mapping is what lets the proxy work on Cloudflare's **Free**
+> plan: without it, proxying to the bare `*.run.app` origin would need a Host-header
+> rewrite (a Worker or paid plan), since Cloud Run 404s on an unrecognized Host. The
+> mapping registers `fillerkiller.app` on the origin, so no rewrite is needed.
+> Cloudflare respects the API's `Cache-Control` (catalog reads cache long, aggregates
+> briefly). A global edge rate-limit rule can be added later; the in-API limiters
+> (per-IP votes, per-IP search, per-instance import) are the current controls.
 
 ### Prerequisites
 
 - `gcloud` CLI authenticated; a GCP project with Cloud Run + Artifact Registry enabled.
 - A **Neon** project. Copy its **pooled** connection string (host has `-pooler`):
   `postgresql://USER:PASS@ep-xxx-pooler.REGION.aws.neon.tech/neondb?sslmode=require`.
-- TMDB read token; Google/GitHub OAuth apps; a domain whose DNS is on Cloudflare
-  (DNS-only — the domain is verified to Google and pointed straight at Cloud Run).
+- TMDB read token; Google/GitHub OAuth apps; a domain on Cloudflare (the domain is
+  verified to Google, mapped on Cloud Run, and proxied orange-cloud by Cloudflare).
 - Two service accounts (set up already): a **runtime** SA the service runs as
   (granted `secretAccessor` on the secrets only) and a **build** SA Cloud Build
   uses (build/push/deploy roles only). The default compute SA has **no roles**,
@@ -175,10 +178,11 @@ Notes:
 - Put real secrets in **Secret Manager** (`--set-secrets`), not `--set-env-vars`.
 - Use the Neon **pooled** string; the `sqlx` pool is already kept small + lazy.
 
-### 3. Map the domain (Cloudflare DNS-only)
+### 3. Map the domain + front with Cloudflare
 
 The SPA is already served same-origin by the API image (step 2), so there is no
-separate SPA host to deploy. Point the domain straight at Cloud Run:
+separate SPA host to deploy. Map the domain on Cloud Run, then proxy it through
+Cloudflare:
 
 1. **Verify the domain to Google** (one-time, interactive): `gcloud domains verify
    $DOMAIN` opens Search Console → add `$DOMAIN` as a **Domain property** → it gives a
@@ -191,16 +195,18 @@ separate SPA host to deploy. Point the domain straight at Cloud Run:
    gcloud beta run domain-mappings describe --domain $DOMAIN --region $REGION \
      --format="value(status.resourceRecords)"   # the A/AAAA (apex) or CNAME (subdomain)
    ```
-3. **Add those records in Cloudflare as DNS-only (gray cloud, `proxied: false`).** An
-   orange-cloud proxy would break TLS/Host (see the note above). `.app` is
-   HSTS-preloaded (HTTPS-only), so nothing loads until the Google-managed cert reports
-   `Ready` — watch the `describe` output.
+3. **Add those records in Cloudflare as proxied (orange-cloud).** The mapping registers
+   `$DOMAIN` on the Cloud Run origin, so the proxy needs no Host-header rewrite (Cloud
+   Run 404s on an unrecognized Host otherwise). First let the mapping's Google-managed
+   cert reach `Ready` (watch the `describe` output) — `.app` is HSTS-preloaded
+   (HTTPS-only), so the origin must have valid TLS before the proxy can reach it;
+   Cloudflare's SSL mode should be **Full (strict)**.
 4. Register each OAuth redirect URI as `https://$DOMAIN/api/auth/<provider>/callback`.
 
-> Edge caching / a global rate-limit rule are **not** in place in this DNS-only setup;
-> the API's own `Cache-Control` still applies at the browser, and the in-API limiters
-> are the rate controls. To add a Cloudflare edge later, front the mapping with a
-> Worker (or a paid plan that can rewrite the Host header) and switch to orange-cloud.
+> Cloudflare respects the API's `Cache-Control` (catalog reads cache long, aggregates
+> briefly). A global edge rate-limit rule can be added on `/api/episodes/*/vote`; until
+> then the in-API limiters (per-IP votes, per-IP search, per-instance import) are the
+> rate controls.
 
 ### 4. Recompute job + backups (scheduled)
 
