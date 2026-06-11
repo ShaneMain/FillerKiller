@@ -9,21 +9,23 @@ export function Header() {
 
   return (
     <header className="border-b border-zinc-800 bg-zinc-950/80 backdrop-blur sticky top-0 z-10">
-      <div className="mx-auto max-w-3xl flex items-center justify-between px-4 py-3">
-        <Link to="/" className="text-lg font-bold tracking-tight">
+      <div className="mx-auto max-w-3xl flex items-center justify-between gap-3 px-4 py-3">
+        <Link to="/" className="shrink-0 text-lg font-bold tracking-tight">
           <Wordmark />
         </Link>
-        <div className="text-sm">
+        <div className="min-w-0 text-sm">
           {loading ? (
             <span className="text-zinc-500">…</span>
           ) : user ? (
-            <div className="flex items-center gap-3">
-              <Link to="/account" className="text-zinc-400 hover:text-zinc-200">
+            <div className="flex min-w-0 items-center gap-3">
+              {/* Truncated: a long name/email would otherwise push the page
+                  wider than a phone viewport and break the mobile layout. */}
+              <Link to="/account" className="min-w-0 truncate text-zinc-400 hover:text-zinc-200">
                 {user.displayName ?? user.email}
               </Link>
               <button
                 onClick={() => void signOut()}
-                className="rounded-md border border-zinc-700 px-2 py-1 text-zinc-300 hover:bg-zinc-800"
+                className="shrink-0 rounded-md border border-zinc-700 px-2 py-1 text-zinc-300 hover:bg-zinc-800"
               >
                 Sign out
               </button>

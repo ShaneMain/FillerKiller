@@ -200,15 +200,19 @@ export function EpisodeRow({
         </div>
       </div>
 
-      {/* Full-width, tappable on mobile; inline beside the row on sm+. */}
-      <div className="grid grid-cols-3 gap-1.5 pl-12 sm:flex sm:shrink-0 sm:pl-0">
-        <VoteButton label="Filler" active={score.myVote === "FILLER"} activeCls="bg-rose-600 text-white"
-          disabled={!signedIn || busy} onClick={() => void vote("FILLER")} />
-        <VoteButton label="Worth It" active={score.myVote === "WORTH_WATCHING"} activeCls="bg-sky-600 text-white"
-          disabled={!signedIn || busy} onClick={() => void vote("WORTH_WATCHING")} />
-        <VoteButton label="Canon" active={score.myVote === "CANON"} activeCls="bg-emerald-600 text-white"
-          disabled={!signedIn || busy} onClick={() => void vote("CANON")} />
-      </div>
+      {/* Full-width, tappable on mobile; inline beside the row on sm+. Hidden
+          entirely when signed out — a page of disabled buttons is just noise
+          (the show page's sign-in banner covers the call to action). */}
+      {signedIn && (
+        <div className="grid grid-cols-3 gap-1.5 pl-12 sm:flex sm:shrink-0 sm:pl-0">
+          <VoteButton label="Filler" active={score.myVote === "FILLER"} activeCls="bg-rose-600 text-white"
+            disabled={busy} onClick={() => void vote("FILLER")} />
+          <VoteButton label="Worth It" active={score.myVote === "WORTH_WATCHING"} activeCls="bg-sky-600 text-white"
+            disabled={busy} onClick={() => void vote("WORTH_WATCHING")} />
+          <VoteButton label="Canon" active={score.myVote === "CANON"} activeCls="bg-emerald-600 text-white"
+            disabled={busy} onClick={() => void vote("CANON")} />
+        </div>
+      )}
     </div>
   );
 }
@@ -286,7 +290,7 @@ function VoteButton({
       disabled={disabled}
       aria-pressed={active}
       aria-label={`Vote ${label}${active ? " (your current vote — click to remove)" : ""}`}
-      title={disabled ? "Sign in to vote" : `Vote ${label}`}
+      title={`Vote ${label}`}
       className={`whitespace-nowrap rounded-md px-3 py-2.5 text-sm font-medium ring-1 ring-inset ring-zinc-700 transition
         ${active ? activeCls : "text-zinc-300 hover:bg-zinc-800"}
         ${disabled ? "cursor-not-allowed opacity-50" : ""}`}

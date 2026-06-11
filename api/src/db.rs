@@ -184,6 +184,40 @@ pub async fn sitemap_shows(pool: &PgPool) -> Result<Vec<SitemapShow>, sqlx::Erro
     Ok(rows)
 }
 
+/// A show in the home page's "popular" browse list.
+pub struct PopularShow {
+    pub tmdb_id: i64,
+    pub name: String,
+    pub slug: String,
+    pub poster_path: Option<String>,
+    pub first_air_year: Option<i32>,
+}
+
+/// The most-voted shows, for the home page browse grid. Ranks by total
+/// community votes across a show's episodes (reading the maintained
+/// `episode_score` tallies, not the raw `vote` table), so the list reflects
+/// where the community is active. Name breaks ties for a stable order.
+pub async fn popular_shows(pool: &PgPool, limit: i64) -> Result<Vec<PopularShow>, sqlx::Error> {
+    let rows = sqlx::query_as!(
+        PopularShow,
+        r#"
+        SELECT s.tmdb_id, s.name, s.slug, s.poster_path, s.first_air_year
+        FROM show s
+        LEFT JOIN episode e ON e.show_id = s.id
+        LEFT JOIN episode_score es ON es.episode_id = e.id
+        GROUP BY s.id
+        ORDER BY
+            COALESCE(SUM(es.filler_votes + es.worth_watching_votes + es.canon_votes), 0) DESC,
+            s.name
+        LIMIT $1
+        "#,
+        limit
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// A published user-authored guide's sitemap entry.
 pub struct SitemapGuide {
     pub show_slug: String,

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   getEpisodes,
@@ -70,7 +70,9 @@ export function SkipGuidePage() {
   const poster = imageUrl(show?.posterPath ?? null, "w154");
 
   function handleModeChange(m: GuideMode) {
-    setSearchParams({ mode: m });
+    // Replace, don't push — flipping through modes shouldn't bury the Back
+    // button under one history entry per click.
+    setSearchParams({ mode: m }, { replace: true });
   }
 
   return (
@@ -180,24 +182,36 @@ function CommunityGuide({ showId, mode, onModeChange }: CommunityGuideProps) {
 
   const modes: GuideMode[] = ["completionist", "standard", "canon-only", "binge"];
 
+  // Keep the active pill visible inside the scrollable mode strip — a shared
+  // ?mode= link would otherwise land with the selection scrolled off-screen.
+  const activeModeRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    activeModeRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [mode]);
+
   return (
     <div>
-      {/* Mode segmented control */}
+      {/* Mode segmented control. The wrapper scrolls horizontally on narrow
+          screens (full-bleed via the negative margin) — the four pills are
+          wider than a phone viewport and must not stretch the page. */}
       <div className="mt-4">
-        <div className="inline-flex rounded-full border border-zinc-700 bg-zinc-900 p-0.5">
-          {modes.map((m) => (
-            <button
-              key={m}
-              onClick={() => onModeChange(m)}
-              className={`rounded-full px-3 py-1 text-sm font-medium transition-colors ${
-                mode === m
-                  ? "bg-zinc-700 text-zinc-100"
-                  : "text-zinc-400 hover:text-zinc-200"
-              }`}
-            >
-              {MODE_LABELS[m]}
-            </button>
-          ))}
+        <div className="-mx-4 overflow-x-auto px-4">
+          <div className="inline-flex rounded-full border border-zinc-700 bg-zinc-900 p-0.5">
+            {modes.map((m) => (
+              <button
+                key={m}
+                ref={mode === m ? activeModeRef : null}
+                onClick={() => onModeChange(m)}
+                className={`shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-sm font-medium transition-colors ${
+                  mode === m
+                    ? "bg-zinc-700 text-zinc-100"
+                    : "text-zinc-400 hover:text-zinc-200"
+                }`}
+              >
+                {MODE_LABELS[m]}
+              </button>
+            ))}
+          </div>
         </div>
         <p className="mt-2 text-sm text-zinc-400">
           {MODE_DESCRIPTIONS[mode]}
@@ -231,8 +245,8 @@ function CommunityGuide({ showId, mode, onModeChange }: CommunityGuideProps) {
           })()}
 
           <div className="mt-6 space-y-6">
-            <Bucket title="Watch" tone="emerald" entries={guide.watch} />
-            <Bucket title="Optional — worth it" tone="sky" entries={guide.optional} />
+            <Bucket title="Watch" tone="emerald" entries={guide.watch} watchedIds={watchedIds} />
+            <Bucket title="Optional — worth it" tone="sky" entries={guide.optional} watchedIds={watchedIds} />
             <Bucket title="Skip" tone="rose" entries={guide.skipped} />
           </div>
         </>
@@ -328,7 +342,18 @@ const TONES: Record<string, string> = {
   rose: "text-rose-300",
 };
 
-function Bucket({ title, tone, entries }: { title: string; tone: string; entries: SkipGuideEntry[] }) {
+function Bucket({
+  title,
+  tone,
+  entries,
+  watchedIds,
+}: {
+  title: string;
+  tone: string;
+  entries: SkipGuideEntry[];
+  /** When provided (signed-in user), watched episodes are dimmed and checked. */
+  watchedIds?: Set<string> | null;
+}) {
   return (
     <section>
       <h2 className={`mb-2 text-sm font-semibold ${TONES[tone]}`}>
@@ -338,14 +363,25 @@ function Bucket({ title, tone, entries }: { title: string; tone: string; entries
         <p className="text-sm text-zinc-600">None.</p>
       ) : (
         <ul className="space-y-1">
-          {entries.map((e) => (
-            <li key={e.episodeId} className="text-sm text-zinc-300">
-              <span className="mr-2 text-zinc-500">
-                S{e.seasonNumber}E{e.episodeNumber}
-              </span>
-              {e.name ?? "Untitled"}
-            </li>
-          ))}
+          {entries.map((e) => {
+            const watched = watchedIds?.has(e.episodeId) ?? false;
+            return (
+              <li
+                key={e.episodeId}
+                className={`text-sm ${watched ? "text-zinc-500" : "text-zinc-300"}`}
+              >
+                <span className="mr-2 text-zinc-500">
+                  S{e.seasonNumber}E{e.episodeNumber}
+                </span>
+                {e.name ?? "Untitled"}
+                {watched && (
+                  <span className="ml-1.5 text-emerald-500" title="You've watched this">
+                    ✓
+                  </span>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>

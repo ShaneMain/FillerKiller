@@ -148,7 +148,7 @@ export function AccountPage() {
               setNameErr(null);
             }}
             placeholder="Your display name"
-            className="w-full max-w-xs rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-rose-500 focus:outline-none"
+            className="w-full max-w-xs rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-base text-zinc-100 placeholder:text-zinc-500 focus:border-rose-500 focus:outline-none sm:text-sm"
           />
           <button
             onClick={() => void onSaveName()}

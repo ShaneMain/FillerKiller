@@ -132,6 +132,7 @@ npm run dev                # http://localhost:5173
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/api/search?q=` | Proxy TMDB search; annotates already-imported shows. |
+| `GET` | `/api/shows?limit=` | Most-voted shows, for the home page browse grid. |
 | `GET` | `/api/shows/{id}` | Show + seasons + TMDB rating. `{id}` is a slug, our UUID, or `tmdb:<n>` (imports on demand). |
 | `GET` | `/api/shows/{id}/episodes?season=` | Episodes with aggregate scores + TMDB ratings; `myVote` when signed in. |
 | `GET` | `/api/shows/{id}/skip-guide` | The watch / optional / skipped partition for the show. |

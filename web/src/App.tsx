@@ -1,4 +1,5 @@
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { useEffect } from "react";
+import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider } from "./lib/auth";
 import { Header } from "./components/Header";
 import { Footer } from "./components/Footer";
@@ -16,9 +17,21 @@ import { PrivacyPage } from "./pages/PrivacyPage";
 import { TermsPage } from "./pages/TermsPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 
+/** Reset scroll on page navigation — an SPA otherwise keeps the previous
+ *  page's scroll position. Keyed on pathname only, so same-page query-param
+ *  changes (search, guide mode) don't jump the view. */
+function ScrollToTop() {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [pathname]);
+  return null;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
+      <ScrollToTop />
       <AuthProvider>
         <div className="flex min-h-screen flex-col bg-zinc-950 text-zinc-100">
           <Header />

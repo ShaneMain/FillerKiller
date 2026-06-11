@@ -19,6 +19,9 @@ pub const TTL_CATALOG: u32 = 3600;
 pub const TTL_SEARCH: u32 = 600;
 /// Episode lists and skip guides — derived from live votes.
 pub const TTL_AGGREGATE: u32 = 30;
+/// The home page's popular-shows list — vote-derived, but rank order moves
+/// slowly and the endpoint is homepage-hot, so it caches longer.
+pub const TTL_POPULAR: u32 = 600;
 
 /// JSON response with a shared-cache `Cache-Control` for catalog data.
 /// `s_maxage` is the CDN/edge TTL in seconds.

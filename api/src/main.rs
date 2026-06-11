@@ -42,9 +42,14 @@ use uuid::Uuid;
 use crate::auth::{CurrentUser, OptionalUser};
 use crate::config::{AuthConfig, Config};
 use crate::error::AppError;
-use crate::models::{AggregateView, SearchItem, SearchResponse, ShowDetail, VoteResponse};
+use crate::models::{
+    AggregateView, PopularShowItem, PopularShowsResponse, SearchItem, SearchResponse, ShowDetail,
+    VoteResponse,
+};
 use crate::rate_limit::{DirectRateLimiter, IpRateLimiter, UserRateLimiter};
-use crate::response::{cacheable_json, private_json, TTL_AGGREGATE, TTL_CATALOG, TTL_SEARCH};
+use crate::response::{
+    cacheable_json, private_json, TTL_AGGREGATE, TTL_CATALOG, TTL_POPULAR, TTL_SEARCH,
+};
 use crate::scoring::{build_skip_guide, GuideMode, ScoredEpisode, VoteValue};
 use crate::tmdb::TmdbClient;
 
@@ -195,6 +200,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(health))
         .route("/health/db", get(health_db))
         .merge(search_routes)
+        .route("/api/shows", get(list_popular_shows))
         .route("/api/shows/{id}", get(get_show))
         .route("/api/shows/{id}/episodes", get(get_show_episodes))
         .route("/api/shows/{id}/skip-guide", get(get_skip_guide))
@@ -412,8 +418,14 @@ async fn security_headers(req: Request, next: Next) -> Response {
     h.insert(
         "content-security-policy",
         HeaderValue::from_static(
+            // The cloudflareinsights.com entries admit the Cloudflare Web
+            // Analytics beacon (auto-injected at the edge): the script loads
+            // from static.cloudflareinsights.com and reports to
+            // cloudflareinsights.com.
             "default-src 'self'; img-src 'self' https://image.tmdb.org data:; \
-             style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; \
+             style-src 'self' 'unsafe-inline'; \
+             script-src 'self' https://static.cloudflareinsights.com; \
+             connect-src 'self' https://cloudflareinsights.com; \
              frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
         ),
     );
@@ -514,6 +526,34 @@ async fn search(
         .collect();
 
     Ok(cacheable_json(&SearchResponse { results }, TTL_SEARCH))
+}
+
+#[derive(Debug, Deserialize)]
+struct PopularShowsParams {
+    limit: Option<i64>,
+}
+
+/// `GET /api/shows?limit=` — the most-voted shows, for the home page's browse
+/// grid. Unauthenticated but deliberately NOT rate-limited (unlike search): it
+/// spends no upstream quota, the query is bounded by the limit clamp, and the
+/// edge cache (TTL_POPULAR) absorbs repeat traffic.
+async fn list_popular_shows(
+    State(state): State<AppState>,
+    Query(params): Query<PopularShowsParams>,
+) -> Result<Response, AppError> {
+    let limit = params.limit.unwrap_or(12).clamp(1, 50);
+    let shows = db::popular_shows(&state.pool, limit)
+        .await?
+        .into_iter()
+        .map(|s| PopularShowItem {
+            slug: s.slug,
+            tmdb_id: s.tmdb_id,
+            name: s.name,
+            first_air_year: s.first_air_year,
+            poster_path: s.poster_path,
+        })
+        .collect();
+    Ok(cacheable_json(&PopularShowsResponse { shows }, TTL_POPULAR))
 }
 
 /// `GET /api/shows/{id}` — show detail with seasons. `{id}` is our uuid, or

@@ -19,7 +19,7 @@
 		# they'd otherwise ship with NO CSP/HSTS/frame protection. Keep in sync
 		# with `security_headers` in api/src/main.rs.
 		header {
-			Content-Security-Policy "default-src 'self'; img-src 'self' https://image.tmdb.org data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+			Content-Security-Policy "default-src 'self'; img-src 'self' https://image.tmdb.org data:; style-src 'self' 'unsafe-inline'; script-src 'self' https://static.cloudflareinsights.com; connect-src 'self' https://cloudflareinsights.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 			X-Content-Type-Options "nosniff"
 			X-Frame-Options "DENY"
 			Referrer-Policy "strict-origin-when-cross-origin"

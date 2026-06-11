@@ -257,6 +257,18 @@ export function searchShows(q: string): Promise<{ results: SearchItem[] }> {
   return request(`/search?q=${encodeURIComponent(q)}`);
 }
 
+export interface PopularShow {
+  slug: string;
+  tmdbId: number;
+  name: string;
+  firstAirYear: number | null;
+  posterPath: string | null;
+}
+
+export function popularShows(): Promise<{ shows: PopularShow[] }> {
+  return request(`/shows`);
+}
+
 export function getShow(id: string): Promise<ShowDetail> {
   return request(`/shows/${encodeURIComponent(id)}`);
 }

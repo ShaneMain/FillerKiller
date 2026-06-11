@@ -30,6 +30,23 @@ pub struct SearchResponse {
     pub results: Vec<SearchItem>,
 }
 
+/// An imported show in the home page's "popular" browse list. Unlike
+/// `SearchItem`, these are always imported, so `slug` is non-null.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PopularShowItem {
+    pub slug: String,
+    pub tmdb_id: i64,
+    pub name: String,
+    pub first_air_year: Option<i32>,
+    pub poster_path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PopularShowsResponse {
+    pub shows: Vec<PopularShowItem>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SeasonSummary {

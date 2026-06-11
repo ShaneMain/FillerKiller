@@ -1,17 +1,33 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { imageUrl, searchShows, type SearchItem } from "../lib/api";
+import { imageUrl, popularShows, searchShows, type PopularShow, type SearchItem } from "../lib/api";
 import { usePageMeta } from "../lib/meta";
+
+// Auto-focusing the search box is helpful with a keyboard but hostile on touch
+// devices, where it pops the on-screen keyboard over the page on every visit.
+const FINE_POINTER =
+  typeof window !== "undefined" && window.matchMedia("(pointer: fine)").matches;
+
+/** A finished search, remembered together with the query that produced it so
+ *  stale results never render against a different (or cleared) query. */
+interface SearchOutcome {
+  q: string;
+  results: SearchItem[] | null;
+  error: string | null;
+}
 
 export function SearchPage() {
   usePageMeta();
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SearchItem[] | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  // The query lives in the URL (?q=) so results survive back/refresh and the
+  // page is shareable. The text box is uncontrolled, keyed on the committed
+  // query — navigating (back/forward, shared link) remounts it with the new
+  // value without any state syncing.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const q = searchParams.get("q")?.trim() ?? "";
+  const [outcome, setOutcome] = useState<SearchOutcome | null>(null);
+  const [popular, setPopular] = useState<PopularShow[] | null>(null);
 
   // The OAuth callback bounces failed sign-ins back here with ?auth_error.
-  const [searchParams, setSearchParams] = useSearchParams();
   const authError = searchParams.get("auth_error");
   function dismissAuthError() {
     const next = new URLSearchParams(searchParams);
@@ -19,20 +35,52 @@ export function SearchPage() {
     setSearchParams(next, { replace: true });
   }
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    const q = query.trim();
+  // Run the search whenever the committed query changes (submit, back/forward,
+  // or landing on a shared /?q= link). All state updates happen async in the
+  // promise handlers; loading/stale handling is derived from `outcome` below.
+  useEffect(() => {
     if (!q) return;
-    setLoading(true);
-    setErr(null);
-    try {
-      const { results } = await searchShows(q);
-      setResults(results);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "search failed");
-    } finally {
-      setLoading(false);
-    }
+    let active = true;
+    searchShows(q)
+      .then((r) => active && setOutcome({ q, results: r.results, error: null }))
+      .catch(
+        (e) =>
+          active &&
+          setOutcome({
+            q,
+            results: null,
+            error: e instanceof Error ? e.message : "search failed",
+          }),
+      );
+    return () => {
+      active = false;
+    };
+  }, [q]);
+
+  // Only an outcome for the *current* query counts; anything else is stale.
+  const current = outcome?.q === q ? outcome : null;
+  const loading = !!q && !current;
+  const results = current?.results ?? null;
+  const err = current?.error ?? null;
+
+  // Popular shows fill the otherwise-empty home page with somewhere to go.
+  useEffect(() => {
+    let active = true;
+    popularShows()
+      .then((r) => active && setPopular(r.shows))
+      .catch(() => { /* best-effort; the section just stays hidden */ });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  function onSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const next = (new FormData(e.currentTarget).get("q") as string | null)?.trim() ?? "";
+    if (!next || next === q) return;
+    const params = new URLSearchParams(searchParams);
+    params.set("q", next);
+    setSearchParams(params);
   }
 
   return (
@@ -78,15 +126,18 @@ export function SearchPage() {
 
       <form onSubmit={onSubmit} className="flex gap-2">
         <input
-          autoFocus
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          key={q}
+          autoFocus={FINE_POINTER}
+          type="search"
+          name="q"
+          defaultValue={q}
           placeholder="e.g. Breaking Bad"
-          className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-zinc-100 placeholder-zinc-500 outline-none focus:border-zinc-500"
+          aria-label="Search TV shows"
+          className="min-w-0 flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-zinc-100 placeholder-zinc-500 outline-none focus:border-zinc-500"
         />
         <button
           type="submit"
-          className="rounded-md bg-rose-600 px-4 py-2 font-medium text-white hover:bg-rose-500"
+          className="shrink-0 rounded-md bg-rose-600 px-4 py-2 font-medium text-white hover:bg-rose-500"
         >
           Search
         </button>
@@ -131,6 +182,47 @@ export function SearchPage() {
             );
           })}
         </ul>
+      )}
+
+      {/* Browse entry point for visitors who don't have a title in mind. Hidden
+          while a search is showing so it never competes with results. */}
+      {!q && popular && popular.length > 0 && (
+        <section className="mt-10">
+          <h2 className="mb-3 text-lg font-semibold">Popular shows</h2>
+          <ul className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-6">
+            {popular.map((s) => {
+              const poster = imageUrl(s.posterPath, "w154");
+              return (
+                <li key={s.tmdbId}>
+                  <Link
+                    to={`/shows/${encodeURIComponent(s.slug)}`}
+                    className="group block"
+                    title={s.name}
+                  >
+                    {poster ? (
+                      <img
+                        src={poster}
+                        alt={`${s.name} poster`}
+                        loading="lazy"
+                        className="aspect-2/3 w-full rounded-md object-cover ring-1 ring-inset ring-zinc-800 transition group-hover:ring-zinc-500"
+                      />
+                    ) : (
+                      <div className="flex aspect-2/3 w-full items-center justify-center rounded-md bg-zinc-900 p-2 text-center text-xs text-zinc-500 ring-1 ring-inset ring-zinc-800">
+                        {s.name}
+                      </div>
+                    )}
+                    <div className="mt-1.5 truncate text-sm text-zinc-300 group-hover:text-zinc-100">
+                      {s.name}
+                    </div>
+                    {s.firstAirYear && (
+                      <div className="text-xs text-zinc-500">{s.firstAirYear}</div>
+                    )}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       )}
     </div>
   );
