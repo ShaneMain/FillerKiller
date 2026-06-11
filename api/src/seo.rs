@@ -73,6 +73,9 @@ struct PageMeta {
     description: String,
     canonical: String,
     image: Option<String>,
+    /// Pixel size of `image`, emitted as `og:image:width`/`height` when known
+    /// (the generated cards are always 1200×630; poster sizes vary, so none).
+    image_size: Option<(u32, u32)>,
 }
 
 fn head_tags(m: &PageMeta) -> String {
@@ -94,9 +97,19 @@ fn head_tags(m: &PageMeta) -> String {
     if let Some(image) = &m.image {
         let image = html_escape(image);
         s.push_str(&format!("<meta property=\"og:image\" content=\"{image}\" />"));
+        if let Some((w, h)) = m.image_size {
+            s.push_str(&format!("<meta property=\"og:image:width\" content=\"{w}\" />"));
+            s.push_str(&format!("<meta property=\"og:image:height\" content=\"{h}\" />"));
+        }
         s.push_str(&format!("<meta name=\"twitter:image\" content=\"{image}\" />"));
     }
     s
+}
+
+/// Absolute URL of the generated per-show OG card. Served by `og_show_png` in
+/// `main.rs` (`/og/shows/{slug}` route) — keep the path in sync with that route.
+fn og_card_url(base: &str, slug: &str) -> String {
+    format!("{base}/og/shows/{slug}.png")
 }
 
 /// Serialize a JSON-LD value into a `<script type="application/ld+json">` block.
@@ -152,7 +165,9 @@ pub fn render_page(template: &str, head: &str, snapshot: &str) -> String {
     )
 }
 
-/// Render a show detail page with per-show SEO head + snapshot.
+/// Render a show detail page with per-show SEO head + snapshot. `image` is the
+/// raw poster URL, used only in the TVSeries JSON-LD — the `og:image` social
+/// card is the generated `/og/shows/{slug}.png` stat image.
 pub fn show_page(
     template: &str,
     base: &str,
@@ -169,16 +184,18 @@ pub fn show_page(
             core.name
         ),
     };
-    // The poster, if any, doubles as the social card; fall back to the site card
-    // so a posterless show still unfurls an image.
-    let card = image.clone().or_else(|| Some(format!("{base}/og-image.png")));
+    // The social card is the generated per-show stat image (poster + "X% filler"),
+    // rendered by `/og/shows/{slug}.png` — it degrades to a text-only card when
+    // the show has no poster, so every share unfurls an image.
+    let card = og_card_url(base, &core.slug);
     let head = head_tags(&PageMeta {
         // Target the actual search intent ("is X filler", "what to skip") in the
         // title — the strongest on-page CTR/ranking lever — not just the brand.
         title: format!("{} Filler List — Which Episodes to Skip | {SITE}", core.name),
         description,
         canonical: canonical.clone(),
-        image: card,
+        image: Some(card),
+        image_size: Some((crate::og::WIDTH, crate::og::HEIGHT)),
     });
 
     // Structured data: a TVSeries carrying the TMDB rating as an AggregateRating
@@ -245,7 +262,6 @@ pub fn skip_guide_page(
     base: &str,
     core: &ShowCore,
     guide: &SkipGuide,
-    image: Option<String>,
 ) -> String {
     let base = base.trim_end_matches('/');
     let canonical = format!("{base}/shows/{}/skip-guide", core.slug);
@@ -261,8 +277,9 @@ pub fn skip_guide_page(
         title: format!("{} Skip Guide — Watch Order & What to Skip | {SITE}", core.name),
         description,
         canonical: canonical.clone(),
-        // The show poster so shared skip-guide links unfurl an image.
-        image: image.or_else(|| Some(format!("{base}/og-image.png"))),
+        // The generated per-show stat card (poster + "X% filler").
+        image: Some(og_card_url(base, &core.slug)),
+        image_size: Some((crate::og::WIDTH, crate::og::HEIGHT)),
     });
     let crumbs = breadcrumb_ld(&[
         ("Home", base),
@@ -297,8 +314,11 @@ pub fn guide_page(template: &str, base: &str, guide: &GuideDetail, image: Option
         title: format!("{} — {} skip guide — {SITE}", guide.title, guide.show_name),
         description,
         canonical: canonical.clone(),
-        // The show poster, falling back to the site card.
+        // The show poster, falling back to the site card. (Guide pages keep the
+        // plain poster — the generated stat card describes the crowd guide, not
+        // a user's curated one.)
         image: image.or_else(|| Some(format!("{base}/og-image.png"))),
+        image_size: None,
     });
     let crumbs = breadcrumb_ld(&[
         ("Home", base),
@@ -526,11 +546,49 @@ mod tests {
             ),
             "{out}"
         );
+        // The social card is the generated stat image, with explicit dimensions;
+        // the raw poster appears only in the JSON-LD.
+        assert!(
+            out.contains(
+                "<meta property=\"og:image\" content=\"https://fillerkiller.app/og/shows/breaking-bad.png\" />"
+            ),
+            "{out}"
+        );
+        assert!(out.contains("<meta property=\"og:image:width\" content=\"1200\" />"), "{out}");
+        assert!(out.contains("<meta property=\"og:image:height\" content=\"630\" />"), "{out}");
+        assert!(out.contains("<meta name=\"twitter:card\" content=\"summary_large_image\" />"), "{out}");
+        assert!(out.contains("\"image\":\"https://img.example/poster.jpg\""), "{out}");
         assert!(out.contains("\"@type\":\"TVSeries\""), "{out}");
         assert!(out.contains("\"aggregateRating\""), "{out}");
         assert!(out.contains("\"ratingValue\":8.9"), "{out}");
         assert!(out.contains("\"ratingCount\":12000"), "{out}");
         assert!(out.contains("\"@type\":\"BreadcrumbList\""), "{out}");
+    }
+
+    #[test]
+    fn skip_guide_page_uses_generated_og_card() {
+        use crate::scoring::{build_skip_guide, ContestedHandling};
+        let core = ShowCore {
+            id: uuid::Uuid::nil(),
+            tmdb_id: 1396,
+            name: "Breaking Bad".into(),
+            slug: "breaking-bad".into(),
+            overview: None,
+            poster_path: Some("/poster.jpg".into()),
+            tmdb_vote_average: None,
+            tmdb_vote_count: None,
+        };
+        let guide = build_skip_guide(&[], ContestedHandling::Canon, false);
+        let tmpl =
+            "<head><!--head--><title>D</title><!--/head--></head><body><div id=\"root\"></div></body>";
+        let out = skip_guide_page(tmpl, "https://fillerkiller.app", &core, &guide);
+        assert!(
+            out.contains(
+                "<meta property=\"og:image\" content=\"https://fillerkiller.app/og/shows/breaking-bad.png\" />"
+            ),
+            "{out}"
+        );
+        assert!(out.contains("<meta property=\"og:image:width\" content=\"1200\" />"), "{out}");
     }
 
     #[test]

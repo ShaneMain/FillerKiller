@@ -37,6 +37,12 @@ governor = "0.8"
 # render through our own Axum route instead.
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.16", default-features = false }
+# Dynamic Open Graph cards (`/og/shows/{slug}.png`): the card is an SVG string
+# rasterized in-process by resvg (which re-exports usvg + tiny-skia + fontdb;
+# fonts are vendored in assets/fonts, never the system's). base64 embeds the
+# TMDB poster as a data-URI <image>.
+resvg = "0.47.0"
+base64 = "0.22.1"
 
 [features]
 # DB-backed integration tests (sqlx::test). Off by default so `cargo test` stays

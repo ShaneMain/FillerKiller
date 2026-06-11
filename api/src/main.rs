@@ -11,6 +11,7 @@ mod guides;
 mod import;
 mod models;
 mod oauth;
+mod og;
 mod rate_limit;
 mod response;
 mod scoring;
@@ -215,7 +216,12 @@ async fn main() -> anyhow::Result<()> {
         // Unknown /api paths return our JSON 404 (not the SPA shell), so a
         // mistyped/removed endpoint can't return 200 HTML and break the client's
         // JSON parsing. Specific routes above take precedence over this catch-all.
-        .route("/api/{*rest}", any(api_not_found));
+        .route("/api/{*rest}", any(api_not_found))
+        // Dynamic Open Graph card targeted by the show/skip-guide pages'
+        // `og:image`. Matchit can't combine a param with a literal suffix in one
+        // segment ("{slug}.png"), so the route captures the whole segment and
+        // the handler strips the ".png" the published URLs carry.
+        .route("/og/shows/{slug}", get(og_show_png));
 
     // Serve the built SPA same-origin as a fallback when configured (one service
     // on Cloud Run); otherwise expose API service-info at "/" (the box serves the
@@ -682,13 +688,11 @@ async fn skip_guide_html(State(state): State<AppState>, Path(slug): Path<String>
                 })
                 .collect();
             let guide = build_skip_guide(&scored, ContestedHandling::Canon, false);
-            let image = state.tmdb.image_url(core.poster_path.as_deref(), "w500");
             html_response(seo::skip_guide_page(
                 &template,
                 &state.auth.base_url,
                 &core,
                 &guide,
-                image,
             ))
         }
         None => not_found_html(template.as_str().to_string()),
@@ -741,6 +745,55 @@ async fn sitemap(State(state): State<AppState>) -> Response {
         xml,
     )
         .into_response()
+}
+
+/// `GET /og/shows/{slug}` (published as `/og/shows/{slug}.png`) — the dynamic
+/// 1200×630 Open Graph card: poster + "X% filler — skip N of M episodes". The
+/// stats are the same scored episodes the skip guide uses. The poster fetch is
+/// best-effort (short timeout, degrades to a text-only card); only an unknown
+/// slug or a render failure errors.
+async fn og_show_png(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+) -> Result<Response, AppError> {
+    // Slugs never contain dots (see `db::slugify`), so a ".png" suffix is
+    // unambiguously the published URL form.
+    let slug = slug.strip_suffix(".png").unwrap_or(&slug);
+    let core = show_core_by_slug(&state, slug)
+        .await
+        .ok_or_else(|| AppError::NotFound(format!("show {slug:?} not found")))?;
+    // The episode query and the poster fetch are independent — overlap them.
+    let (episodes, poster) = tokio::join!(
+        db::episodes_with_scores(&state.pool, core.id, None, None),
+        async {
+            match state.tmdb.image_url(core.poster_path.as_deref(), "w342") {
+                Some(url) => og::fetch_poster(&state.http, &url).await,
+                None => None,
+            }
+        }
+    );
+    let stats = og::stats_from_episodes(&episodes?);
+
+    let svg = og::og_svg(&core.name, &stats, poster.as_ref());
+    // Rasterizing is CPU-bound (tens of ms); keep it off the async workers.
+    let png = tokio::task::spawn_blocking(move || og::render_png(&svg))
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?
+        .map_err(AppError::Internal)?;
+
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "image/png"),
+            // Long edge TTL: the card only moves as votes accumulate, and the
+            // Cloudflare edge absorbs the unfurler bursts a share produces.
+            (
+                axum::http::header::CACHE_CONTROL,
+                "public, max-age=3600, s-maxage=86400",
+            ),
+        ],
+        png,
+    )
+        .into_response())
 }
 
 #[derive(Debug, Deserialize)]
