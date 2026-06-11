@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO image_cache (path, content_type, body) VALUES ($1, $2, $3)\n         ON CONFLICT (path) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d90f718a38acd0d1d68db9aef1ac28185cce86871c1ecf43b88fd80c70eadd01"
+}

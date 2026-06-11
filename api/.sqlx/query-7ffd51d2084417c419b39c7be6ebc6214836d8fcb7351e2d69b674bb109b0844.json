@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM image_cache\n         WHERE NOT pinned AND fetched_at < now() - make_interval(days => $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7ffd51d2084417c419b39c7be6ebc6214836d8fcb7351e2d69b674bb109b0844"
+}

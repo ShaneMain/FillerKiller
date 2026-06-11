@@ -7,7 +7,7 @@
 	# API + health endpoints -> the Rust service. The API sets its own security
 	# headers (incl. Cache-Control) per response, so don't add the static block's
 	# headers here.
-	@api path /api/* /health /health/*
+	@api path /api/* /health /health/* /img/* /og/*
 	handle @api {
 		reverse_proxy api:8080
 	}

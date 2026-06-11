@@ -1043,6 +1043,77 @@ pub async fn recompute_all_scores(pool: &PgPool) -> Result<u64, sqlx::Error> {
     Ok(res.rows_affected())
 }
 
+/// A cached TMDB image body, ready to serve.
+pub struct CachedImage {
+    pub content_type: String,
+    pub body: Vec<u8>,
+}
+
+/// Look up a cached image by its `{size}/{file}` key.
+pub async fn get_cached_image(
+    pool: &PgPool,
+    path: &str,
+) -> Result<Option<CachedImage>, sqlx::Error> {
+    let row = sqlx::query_as!(
+        CachedImage,
+        "SELECT content_type, body FROM image_cache WHERE path = $1",
+        path
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Store a fetched image. On a concurrent double-fetch the first write wins —
+/// the bodies are identical anyway (TMDB paths are content-unique).
+pub async fn upsert_cached_image(
+    pool: &PgPool,
+    path: &str,
+    content_type: &str,
+    body: &[u8],
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "INSERT INTO image_cache (path, content_type, body) VALUES ($1, $2, $3)
+         ON CONFLICT (path) DO NOTHING",
+        path,
+        content_type,
+        body,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Sync the cache's pin set to the current popular shows and prune.
+///
+/// `files` are the poster file names (no leading slash, no size prefix) of the
+/// currently-popular shows; every cached size variant of those files is pinned,
+/// everything else is unpinned — so a show that falls off the popular list
+/// loses its pin and ages out with the TTL. Unpinned rows fetched more than
+/// `ttl_days` ago are deleted. Returns the number of rows pruned.
+pub async fn sync_pinned_images(
+    pool: &PgPool,
+    files: &[String],
+    ttl_days: i32,
+) -> Result<u64, sqlx::Error> {
+    sqlx::query!(
+        "UPDATE image_cache
+         SET pinned = (split_part(path, '/', 2) = ANY($1))
+         WHERE pinned IS DISTINCT FROM (split_part(path, '/', 2) = ANY($1))",
+        files,
+    )
+    .execute(pool)
+    .await?;
+    let res = sqlx::query!(
+        "DELETE FROM image_cache
+         WHERE NOT pinned AND fetched_at < now() - make_interval(days => $1)",
+        ttl_days,
+    )
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1060,6 +1131,42 @@ mod tests {
         assert_eq!(slugify("12 Monkeys"), "12-monkeys");
         assert_eq!(slugify("---"), "");
         assert_eq!(slugify("ＡＢＣ"), ""); // non-ascii letters drop → caller falls back to tmdb id
+    }
+
+    /// Image cache lifecycle: store/read round-trip, first-write-wins upsert,
+    /// pin sync against a popular set, and TTL pruning of unpinned rows.
+    #[cfg(feature = "integration")]
+    #[sqlx::test]
+    async fn image_cache_pin_and_prune(pool: sqlx::PgPool) {
+        upsert_cached_image(&pool, "w154/popular.jpg", "image/jpeg", b"pop-small").await.unwrap();
+        upsert_cached_image(&pool, "w342/popular.jpg", "image/jpeg", b"pop-large").await.unwrap();
+        upsert_cached_image(&pool, "w154/other.jpg", "image/jpeg", b"other").await.unwrap();
+
+        // Round-trip + first-write-wins.
+        upsert_cached_image(&pool, "w154/other.jpg", "image/png", b"changed").await.unwrap();
+        let img = get_cached_image(&pool, "w154/other.jpg").await.unwrap().unwrap();
+        assert_eq!(img.content_type, "image/jpeg");
+        assert_eq!(img.body, b"other");
+        assert!(get_cached_image(&pool, "w154/missing.jpg").await.unwrap().is_none());
+
+        // Pin both size variants of the popular file; nothing old enough to prune.
+        let pruned = sync_pinned_images(&pool, &["popular.jpg".into()], 14).await.unwrap();
+        assert_eq!(pruned, 0);
+
+        // Age every row past the TTL: only the unpinned one is pruned.
+        sqlx::query!("UPDATE image_cache SET fetched_at = now() - interval '30 days'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let pruned = sync_pinned_images(&pool, &["popular.jpg".into()], 14).await.unwrap();
+        assert_eq!(pruned, 1);
+        assert!(get_cached_image(&pool, "w154/other.jpg").await.unwrap().is_none());
+        assert!(get_cached_image(&pool, "w154/popular.jpg").await.unwrap().is_some());
+
+        // The show falls off the popular list: its rows unpin and age out.
+        let pruned = sync_pinned_images(&pool, &[], 14).await.unwrap();
+        assert_eq!(pruned, 2);
+        assert!(get_cached_image(&pool, "w342/popular.jpg").await.unwrap().is_none());
     }
 
     /// End-to-end check of the `episode_score` denormalization: the trigger keeps

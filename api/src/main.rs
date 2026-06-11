@@ -201,6 +201,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/health/db", get(health_db))
         .merge(search_routes)
         .route("/api/shows", get(list_popular_shows))
+        .route("/img/t/p/{size}/{file}", get(img_proxy))
         .route("/api/shows/{id}", get(get_show))
         .route("/api/shows/{id}/episodes", get(get_show_episodes))
         .route("/api/shows/{id}/skip-guide", get(get_skip_guide))
@@ -533,6 +534,31 @@ struct PopularShowsParams {
     limit: Option<i64>,
 }
 
+/// Days an unpinned cached image survives without being re-pinned. Posters of
+/// currently-popular shows are pinned and never expire; see `image_cache`.
+const IMAGE_CACHE_TTL_DAYS: i32 = 14;
+
+/// TMDB sizes the image proxy will serve — the ones the SPA and OG cards use.
+/// Anything else is rejected rather than forwarded, so the proxy can't be used
+/// to enumerate TMDB's CDN.
+const IMAGE_SIZES: &[&str] = &["w92", "w154", "w185", "w300", "w342", "w500"];
+
+/// Whether `{size}/{file}` is a well-formed TMDB image request: a whitelisted
+/// size and a bare `{alnum}.jpg|jpeg|png` file name. Keeps the proxy from
+/// fetching arbitrary upstream paths (no slashes, dots, or query syntax).
+fn valid_image_request(size: &str, file: &str) -> bool {
+    if !IMAGE_SIZES.contains(&size) {
+        return false;
+    }
+    let Some((stem, ext)) = file.rsplit_once('.') else {
+        return false;
+    };
+    matches!(ext, "jpg" | "jpeg" | "png")
+        && !stem.is_empty()
+        && stem.len() <= 64
+        && stem.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
 /// `GET /api/shows?limit=` — the most-voted shows, for the home page's browse
 /// grid. Unauthenticated but deliberately NOT rate-limited (unlike search): it
 /// spends no upstream quota, the query is bounded by the limit clamp, and the
@@ -542,7 +568,7 @@ async fn list_popular_shows(
     Query(params): Query<PopularShowsParams>,
 ) -> Result<Response, AppError> {
     let limit = params.limit.unwrap_or(12).clamp(1, 50);
-    let shows = db::popular_shows(&state.pool, limit)
+    let shows: Vec<PopularShowItem> = db::popular_shows(&state.pool, limit)
         .await?
         .into_iter()
         .map(|s| PopularShowItem {
@@ -553,7 +579,111 @@ async fn list_popular_shows(
             poster_path: s.poster_path,
         })
         .collect();
+
+    // Re-sync the image cache's pin set to this popular list (and prune expired
+    // unpinned rows). Best-effort and off the response path: this read runs at
+    // most once per edge-cache TTL, so it doubles as the cache's housekeeping
+    // tick without needing a scheduler.
+    let files: Vec<String> = shows
+        .iter()
+        .filter_map(|s| s.poster_path.as_deref())
+        .map(|p| p.trim_start_matches('/').to_string())
+        .collect();
+    let pool = state.pool.clone();
+    tokio::spawn(async move {
+        match db::sync_pinned_images(&pool, &files, IMAGE_CACHE_TTL_DAYS).await {
+            Ok(pruned) if pruned > 0 => tracing::info!("image cache pruned {pruned} rows"),
+            Ok(_) => {}
+            Err(e) => tracing::warn!("image cache pin sync failed: {e}"),
+        }
+    });
+
     Ok(cacheable_json(&PopularShowsResponse { shows }, TTL_POPULAR))
+}
+
+/// `GET /img/t/p/{size}/{file}` — same-origin TMDB image proxy backed by the
+/// `image_cache` table. A hit serves straight from Postgres; a miss fetches
+/// from TMDB's CDN and stores the body. Served `immutable` (TMDB image paths
+/// are content-unique), so the Cloudflare edge absorbs nearly all traffic and
+/// the DB sees roughly one read per image per edge eviction.
+async fn img_proxy(
+    State(state): State<AppState>,
+    Path((size, file)): Path<(String, String)>,
+) -> Result<Response, AppError> {
+    if !valid_image_request(&size, &file) {
+        return Err(AppError::BadRequest("not a valid image path".into()));
+    }
+    let key = format!("{size}/{file}");
+
+    let cached = match db::get_cached_image(&state.pool, &key).await {
+        Ok(hit) => hit,
+        // A cache-read failure shouldn't take images down — fall through to TMDB.
+        Err(e) => {
+            tracing::warn!("image cache read failed for {key}: {e}");
+            None
+        }
+    };
+    let (content_type, body) = match cached {
+        Some(img) => (img.content_type, img.body),
+        None => {
+            let url = state
+                .tmdb
+                .image_url(Some(&format!("/{file}")), &size)
+                .expect("path is always Some");
+            let res = state
+                .http
+                .get(&url)
+                .timeout(std::time::Duration::from_secs(10))
+                .send()
+                .await
+                .map_err(|e| AppError::Internal(e.into()))?;
+            if res.status() == reqwest::StatusCode::NOT_FOUND {
+                return Err(AppError::NotFound("no such image".into()));
+            }
+            if !res.status().is_success() {
+                return Err(AppError::Internal(anyhow::anyhow!(
+                    "upstream image fetch returned {}",
+                    res.status()
+                )));
+            }
+            let content_type = res
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .filter(|v| v.starts_with("image/"))
+                .unwrap_or("image/jpeg")
+                .to_string();
+            let body = res
+                .bytes()
+                .await
+                .map_err(|e| AppError::Internal(e.into()))?
+                .to_vec();
+            // Posters at our sizes are tens of KB; refuse to cache or relay
+            // anything implausibly large.
+            const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+            if body.len() > MAX_IMAGE_BYTES {
+                return Err(AppError::Internal(anyhow::anyhow!(
+                    "upstream image unreasonably large ({} bytes)",
+                    body.len()
+                )));
+            }
+            if let Err(e) = db::upsert_cached_image(&state.pool, &key, &content_type, &body).await {
+                tracing::warn!("image cache write failed for {key}: {e}");
+            }
+            (content_type, body)
+        }
+    };
+
+    let mut res = body.into_response();
+    let headers = res.headers_mut();
+    if let Ok(v) = HeaderValue::from_str(&content_type) {
+        headers.insert(axum::http::header::CONTENT_TYPE, v);
+    }
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=31536000, immutable"),
+    );
+    Ok(res)
 }
 
 /// `GET /api/shows/{id}` — show detail with seasons. `{id}` is our uuid, or
@@ -1361,6 +1491,22 @@ mod tests {
         assert_eq!(set.screen_name.as_deref(), Some("Ann"));
         let cleared: UpdateMeBody = serde_json::from_str(r#"{"screenName":null}"#).unwrap();
         assert_eq!(cleared.screen_name, None);
+    }
+
+    #[test]
+    fn image_request_validation_blocks_proxy_abuse() {
+        assert!(valid_image_request("w154", "lP4zwr0F7hWTbAFltfoFTc2AxRG.jpg"));
+        assert!(valid_image_request("w342", "a1B2.png"));
+        assert!(valid_image_request("w92", "x.jpeg"));
+        // Unknown size, traversal, nested paths, query smuggling, wrong/missing
+        // extension, oversized stem — all rejected.
+        assert!(!valid_image_request("original", "a.jpg"));
+        assert!(!valid_image_request("w154", "..jpg"));
+        assert!(!valid_image_request("w154", "a/b.jpg"));
+        assert!(!valid_image_request("w154", "a.jpg?x=1"));
+        assert!(!valid_image_request("w154", "a.svg"));
+        assert!(!valid_image_request("w154", "a"));
+        assert!(!valid_image_request("w154", &format!("{}.jpg", "a".repeat(65))));
     }
 
     #[test]

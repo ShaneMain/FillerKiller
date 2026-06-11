@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE image_cache\n         SET pinned = (split_part(path, '/', 2) = ANY($1))\n         WHERE pinned IS DISTINCT FROM (split_part(path, '/', 2) = ANY($1))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fc8a0162e7278cf02603841e03be39949c08fa9cbabd23d95d64fb92ad3f64a6"
+}

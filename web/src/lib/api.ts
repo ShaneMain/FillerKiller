@@ -384,9 +384,9 @@ export function loginUrl(provider: "google" | "github", next?: string): string {
   return `/api/auth/${provider}/login${q}`;
 }
 
-const TMDB_IMG = "https://image.tmdb.org/t/p";
-
-/** Build a TMDB image URL from a stored relative path (images come from TMDB's CDN). */
+/** Build an image URL from a stored TMDB-relative path. Served same-origin via
+ *  the API's caching proxy (`/img/t/p/...`), which is backed by Postgres and
+ *  edge-cached — see `img_proxy` in the API. */
 export function imageUrl(path: string | null, size = "w300"): string | null {
-  return path ? `${TMDB_IMG}/${size}${path}` : null;
+  return path ? `/img/t/p/${size}${path}` : null;
 }

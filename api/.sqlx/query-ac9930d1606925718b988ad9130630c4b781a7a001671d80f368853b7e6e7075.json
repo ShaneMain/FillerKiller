@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE image_cache SET fetched_at = now() - interval '30 days'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "ac9930d1606925718b988ad9130630c4b781a7a001671d80f368853b7e6e7075"
+}
