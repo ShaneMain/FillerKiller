@@ -1,10 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
+  getEpisodes,
   getShow,
   getSkipGuide,
   imageUrl,
   listGuides,
+  type GuideMode,
   type GuideSummary,
   type ShowDetail,
   type SkipGuide,
@@ -15,13 +17,42 @@ import { useAuth } from "../lib/auth";
 import { usePageMeta } from "../lib/meta";
 import { LikeButton } from "../components/LikeButton";
 
-type Contested = "canon" | "filler";
 type Tab = "community" | "user";
+
+const MODE_LABELS: Record<GuideMode, string> = {
+  completionist: "Completionist",
+  standard: "Standard",
+  "canon-only": "Canon only",
+  binge: "Binge cut",
+};
+
+const MODE_DESCRIPTIONS: Record<GuideMode, string> = {
+  completionist: "Everything except confirmed filler — the fullest experience.",
+  standard: "Canon plus standout standalone episodes, filler skipped.",
+  "canon-only": "The canon-only spine — all filler and standalone skipped.",
+  binge: "Canon plus the best-rated standalone episodes — TMDB 7.0+.",
+};
+
+function formatTimeSaved(minutes: number): string {
+  if (minutes < 120) return `${minutes} min`;
+  return `${Math.round(minutes / 60)} h`;
+}
 
 export function SkipGuidePage() {
   const { id = "" } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [show, setShow] = useState<ShowDetail | null>(null);
   const [tab, setTab] = useState<Tab>("community");
+
+  const rawMode = searchParams.get("mode") as GuideMode | null;
+  const mode: GuideMode =
+    rawMode === "completionist" ||
+    rawMode === "standard" ||
+    rawMode === "canon-only" ||
+    rawMode === "binge"
+      ? rawMode
+      : "standard";
+
   const name = show?.name ?? null;
   usePageMeta(
     name ? `Skip guide — ${name}` : "Skip guide",
@@ -37,6 +68,10 @@ export function SkipGuidePage() {
   }, [id]);
 
   const poster = imageUrl(show?.posterPath ?? null, "w154");
+
+  function handleModeChange(m: GuideMode) {
+    setSearchParams({ mode: m });
+  }
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8">
@@ -67,7 +102,11 @@ export function SkipGuidePage() {
         </TabButton>
       </div>
 
-      {tab === "community" ? <CommunityGuide showId={id} /> : <UserGuides showId={id} />}
+      {tab === "community" ? (
+        <CommunityGuide showId={id} mode={mode} onModeChange={handleModeChange} />
+      ) : (
+        <UserGuides showId={id} />
+      )}
     </div>
   );
 }
@@ -87,45 +126,116 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   );
 }
 
-function CommunityGuide({ showId }: { showId: string }) {
+interface CommunityGuideProps {
+  showId: string;
+  mode: GuideMode;
+  onModeChange: (m: GuideMode) => void;
+}
+
+function CommunityGuide({ showId, mode, onModeChange }: CommunityGuideProps) {
+  const { user } = useAuth();
   const [guide, setGuide] = useState<SkipGuide | null>(null);
-  const [contested, setContested] = useState<Contested>("canon");
+  /** Set of episode IDs the signed-in user has watched (null = not yet loaded). */
+  const [watchedIds, setWatchedIds] = useState<Set<string> | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
     setGuide(null);
     setErr(null);
-    getSkipGuide(showId, contested)
+    getSkipGuide(showId, mode)
       .then((g) => active && setGuide(g))
       .catch((e) => active && setErr(e instanceof Error ? e.message : "failed to load skip guide"));
     return () => {
       active = false;
     };
-  }, [showId, contested]);
+  }, [showId, mode]);
+
+  // Fetch all episodes (no season filter) to get the user's watched state when
+  // signed in. This gives us `score.watched` for every episode, enabling the
+  // client-side intersection with the guide's watch list. We skip the fetch for
+  // anonymous visitors — the guide itself is already cached and this would be
+  // a private (uncached) request we don't need.
+  const userId = user?.id;
+  useEffect(() => {
+    let active = true;
+    if (!userId) {
+      // Delay the clear until effect cleanup to avoid the synchronous-setState
+      // warning: return a cleanup that sets the stale ids to null.
+      return () => {
+        setWatchedIds(null);
+      };
+    }
+    getEpisodes(showId)
+      .then((r) => {
+        if (!active) return;
+        const ids = new Set(r.episodes.filter((e) => e.score.watched).map((e) => e.id));
+        setWatchedIds(ids);
+      })
+      .catch(() => { /* best-effort; progress is non-critical */ });
+    return () => {
+      active = false;
+    };
+  }, [showId, userId]);
+
+  const modes: GuideMode[] = ["completionist", "standard", "canon-only", "binge"];
 
   return (
     <div>
-      <p className="mt-4 text-sm text-zinc-400">
-        Crowd-sourced watch order. Unsure episodes (too few or split votes) are{" "}
-        <button
-          onClick={() => setContested((c) => (c === "canon" ? "filler" : "canon"))}
-          className="rounded border border-zinc-700 px-1.5 py-0.5 text-zinc-200 hover:bg-zinc-800"
-        >
-          {contested === "canon" ? "kept (safe)" : "skipped (aggressive)"}
-        </button>
-        .
-      </p>
+      {/* Mode segmented control */}
+      <div className="mt-4">
+        <div className="inline-flex rounded-full border border-zinc-700 bg-zinc-900 p-0.5">
+          {modes.map((m) => (
+            <button
+              key={m}
+              onClick={() => onModeChange(m)}
+              className={`rounded-full px-3 py-1 text-sm font-medium transition-colors ${
+                mode === m
+                  ? "bg-zinc-700 text-zinc-100"
+                  : "text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              {MODE_LABELS[m]}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-sm text-zinc-400">
+          {MODE_DESCRIPTIONS[mode]}
+        </p>
+      </div>
 
       {err && <p className="mt-6 text-rose-400">{err}</p>}
       {!guide && !err && <p className="mt-6 text-zinc-400">Building guide…</p>}
 
       {guide && (
-        <div className="mt-6 space-y-6">
-          <Bucket title="Watch" tone="emerald" entries={guide.watch} />
-          <Bucket title="Optional — worth it" tone="sky" entries={guide.optional} />
-          <Bucket title="Skip" tone="rose" entries={guide.skipped} />
-        </div>
+        <>
+          {/* Time-saved banner */}
+          {guide.minutesSkipped != null && (
+            <p className="mt-4 text-sm text-zinc-400">
+              Skip {guide.skipped.length} of{" "}
+              {guide.watch.length + guide.optional.length + guide.skipped.length} episodes
+              {" "}— save ≈ {formatTimeSaved(guide.minutesSkipped)}
+            </p>
+          )}
+
+          {/* Watch-list progress for signed-in users */}
+          {user && watchedIds != null && guide.watch.length > 0 && (() => {
+            const watchedInList = guide.watch.filter((e) => watchedIds.has(e.episodeId)).length;
+            return (
+              <p className="mt-2 text-sm text-zinc-400">
+                You've watched{" "}
+                <span className="font-medium text-zinc-200">{watchedInList} of {guide.watch.length}</span>{" "}
+                watch-list episodes
+              </p>
+            );
+          })()}
+
+          <div className="mt-6 space-y-6">
+            <Bucket title="Watch" tone="emerald" entries={guide.watch} />
+            <Bucket title="Optional — worth it" tone="sky" entries={guide.optional} />
+            <Bucket title="Skip" tone="rose" entries={guide.skipped} />
+          </div>
+        </>
       )}
     </div>
   );

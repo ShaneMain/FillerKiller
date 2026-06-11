@@ -214,6 +214,7 @@ async fn write_episodes(
                 "still_path": ep.still_path,
                 "tmdb_vote_average": ep.vote_average,
                 "tmdb_vote_count": ep.vote_count,
+                "runtime_minutes": ep.runtime,
             })
         })
         .collect();

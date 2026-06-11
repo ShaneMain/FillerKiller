@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT reason, COUNT(*) AS \"count!\"\n        FROM vote\n        WHERE episode_id = $1\n          AND value = ($2::text)::vote_value\n          AND reason IS NOT NULL\n        GROUP BY reason\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      null
+    ]
+  },
+  "hash": "51eedffa687df0e42e31908fc817e94a65a3f72f84b1a944bd65db7995abead4"
+}

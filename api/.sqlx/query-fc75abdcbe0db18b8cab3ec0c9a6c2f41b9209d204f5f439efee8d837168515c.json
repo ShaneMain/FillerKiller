@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM episode_watch WHERE user_id = $1 AND episode_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fc75abdcbe0db18b8cab3ec0c9a6c2f41b9209d204f5f439efee8d837168515c"
+}

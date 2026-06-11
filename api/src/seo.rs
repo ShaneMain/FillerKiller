@@ -567,7 +567,7 @@ mod tests {
 
     #[test]
     fn skip_guide_page_uses_generated_og_card() {
-        use crate::scoring::{build_skip_guide, ContestedHandling};
+        use crate::scoring::{build_skip_guide, GuideMode};
         let core = ShowCore {
             id: uuid::Uuid::nil(),
             tmdb_id: 1396,
@@ -578,7 +578,7 @@ mod tests {
             tmdb_vote_average: None,
             tmdb_vote_count: None,
         };
-        let guide = build_skip_guide(&[], ContestedHandling::Canon, false);
+        let guide = build_skip_guide(&[], GuideMode::Standard, false);
         let tmpl =
             "<head><!--head--><title>D</title><!--/head--></head><body><div id=\"root\"></div></body>";
         let out = skip_guide_page(tmpl, "https://fillerkiller.app", &core, &guide);

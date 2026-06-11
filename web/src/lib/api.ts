@@ -3,6 +3,43 @@
 // `/api` + `/health` to the backend.
 
 export type VoteValue = "FILLER" | "WORTH_WATCHING" | "CANON";
+
+/** Reason tags that can be attached to a vote. Each tag is only valid for one
+ *  vote value; the UI enforces this by only showing the relevant three chips. */
+export type VoteReason =
+  // FILLER reasons
+  | "recap"
+  | "side-story"
+  | "fun-but-skippable"
+  // WORTH_WATCHING reasons
+  | "self-contained-gem"
+  | "character-moment"
+  | "worldbuilding"
+  // CANON reasons
+  | "major-plot"
+  | "character-development"
+  | "arc-setup";
+
+/** Human-readable labels for each reason tag, matching the backend spec. */
+export const REASON_LABELS: Record<VoteReason, string> = {
+  "recap": "Recap episode",
+  "side-story": "Side story, no plot",
+  "fun-but-skippable": "Fun but skippable",
+  "self-contained-gem": "Self-contained gem",
+  "character-moment": "Great character moment",
+  "worldbuilding": "Worldbuilding",
+  "major-plot": "Major plot",
+  "character-development": "Character development",
+  "arc-setup": "Sets up a later arc",
+};
+
+/** The three reason tags valid for each vote value. */
+export const VOTE_REASONS: Record<VoteValue, VoteReason[]> = {
+  FILLER: ["recap", "side-story", "fun-but-skippable"],
+  WORTH_WATCHING: ["self-contained-gem", "character-moment", "worldbuilding"],
+  CANON: ["major-plot", "character-development", "arc-setup"],
+};
+export type GuideMode = "completionist" | "standard" | "canon-only" | "binge";
 export type EpisodeStatus =
   | "CANON"
   | "WORTH_WATCHING"
@@ -47,6 +84,14 @@ export interface EpisodeScore {
   fillerScore: number | null;
   status: EpisodeStatus;
   myVote: VoteValue | null;
+  /** The signed-in user's reason tag for their vote; null if none set. */
+  myReason: VoteReason | null;
+  /** Reason counts for the plurality value. Only reasons with count > 0 are
+   *  present; the map is empty when the episode has no clear verdict. */
+  reasonCounts: Partial<Record<VoteReason, number>>;
+  /** Whether the signed-in user has marked this episode as watched. Always
+   *  false when not signed in. */
+  watched: boolean;
 }
 
 export interface Episode {
@@ -59,12 +104,17 @@ export interface Episode {
   /** TMDB's own audience rating (0–10) and vote count; null until imported. */
   tmdbRating: number | null;
   tmdbVoteCount: number | null;
+  /** Runtime in minutes from TMDB; null until imported. */
+  runtimeMinutes: number | null;
   score: EpisodeScore;
 }
 
 export interface VoteResult {
   myVote: VoteValue | null;
-  score: Omit<EpisodeScore, "myVote">;
+  myReason: VoteReason | null;
+  // The vote response's score carries no per-user `watched` flag (that state
+  // is owned by the watched endpoints) — the client preserves its local value.
+  score: Omit<EpisodeScore, "myVote" | "myReason" | "watched">;
 }
 
 export interface SkipGuideEntry {
@@ -80,6 +130,9 @@ export interface SkipGuide {
   optional: SkipGuideEntry[];
   skipped: SkipGuideEntry[];
   thresholds: { minVotes: number; contestedMargin: number };
+  mode: GuideMode;
+  validModes: string[];
+  minutesSkipped: number | null;
 }
 
 export interface Me {
@@ -208,22 +261,43 @@ export function getShow(id: string): Promise<ShowDetail> {
   return request(`/shows/${encodeURIComponent(id)}`);
 }
 
-export function getEpisodes(id: string, season?: number): Promise<{ episodes: Episode[] }> {
+export interface EpisodesResponse {
+  episodes: Episode[];
+  /** How many episodes the signed-in user has watched for the whole show. Null
+   *  when not signed in. */
+  watchedCount: number | null;
+}
+
+export function getEpisodes(id: string, season?: number): Promise<EpisodesResponse> {
   const q = season != null ? `?season=${season}` : "";
   return request(`/shows/${encodeURIComponent(id)}/episodes${q}`);
 }
 
-export function getSkipGuide(
-  id: string,
-  contested: "canon" | "filler" | "show" = "canon",
-): Promise<SkipGuide> {
-  return request(`/shows/${encodeURIComponent(id)}/skip-guide?contested=${contested}`);
+/** Mark an episode as watched (idempotent). Auth required. */
+export function markWatched(episodeId: string): Promise<void> {
+  return request(`/episodes/${episodeId}/watched`, { method: "PUT" });
 }
 
-export function castVote(episodeId: string, value: VoteValue): Promise<VoteResult> {
+/** Unmark an episode as watched (idempotent). Auth required. */
+export function unmarkWatched(episodeId: string): Promise<void> {
+  return request(`/episodes/${episodeId}/watched`, { method: "DELETE" });
+}
+
+export function getSkipGuide(
+  id: string,
+  mode: GuideMode = "standard",
+): Promise<SkipGuide> {
+  return request(`/shows/${encodeURIComponent(id)}/skip-guide?mode=${mode}`);
+}
+
+export function castVote(
+  episodeId: string,
+  value: VoteValue,
+  reason?: VoteReason | null,
+): Promise<VoteResult> {
   return request(`/episodes/${episodeId}/vote`, {
     method: "PUT",
-    body: JSON.stringify({ value }),
+    body: JSON.stringify({ value, reason: reason ?? null }),
   });
 }
 

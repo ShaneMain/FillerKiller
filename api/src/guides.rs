@@ -558,7 +558,7 @@ mod tests {
         for n in 1i32..=3 {
             db::upsert_episode(
                 &pool, show, season, 8100 + n as i64, 1, n,
-                Some(&format!("E{n}")), None, None, None, None, None,
+                Some(&format!("E{n}")), None, None, None, None, None, None,
             )
             .await
             .unwrap();

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(*)::bigint AS \"count!\"\n        FROM episode_watch ew\n        JOIN episode e ON e.id = ew.episode_id\n        WHERE ew.user_id = $1\n          AND e.show_id  = $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "56cb1192b58c28b65eaf0dfb63b5a180277c139f89b46551789e3d52eeb0416f"
+}

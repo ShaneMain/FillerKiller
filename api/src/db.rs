@@ -2,6 +2,8 @@
 //! (`query!`/`query_as!`) — verified against the schema at build time, with the
 //! offline `.sqlx` cache committed so builds don't need a live DB.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -328,21 +330,24 @@ pub async fn upsert_episode(
     still_path: Option<&str>,
     tmdb_vote_average: Option<f64>,
     tmdb_vote_count: Option<i32>,
+    runtime_minutes: Option<i32>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query!(
         r#"
         INSERT INTO episode (
             show_id, season_id, tmdb_id, season_number, episode_number,
-            name, overview, air_date, still_path, tmdb_vote_average, tmdb_vote_count
+            name, overview, air_date, still_path, tmdb_vote_average, tmdb_vote_count,
+            runtime_minutes
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         ON CONFLICT (tmdb_id) DO UPDATE SET
             name = EXCLUDED.name,
             overview = EXCLUDED.overview,
             air_date = EXCLUDED.air_date,
             still_path = EXCLUDED.still_path,
             tmdb_vote_average = EXCLUDED.tmdb_vote_average,
-            tmdb_vote_count = EXCLUDED.tmdb_vote_count
+            tmdb_vote_count = EXCLUDED.tmdb_vote_count,
+            runtime_minutes = EXCLUDED.runtime_minutes
         "#,
         show_id,
         season_id,
@@ -355,6 +360,7 @@ pub async fn upsert_episode(
         still_path,
         tmdb_vote_average,
         tmdb_vote_count,
+        runtime_minutes,
     )
     .execute(executor)
     .await?;
@@ -406,14 +412,17 @@ pub async fn upsert_episodes(
         r#"
         INSERT INTO episode (
             show_id, season_id, tmdb_id, season_number, episode_number,
-            name, overview, air_date, still_path, tmdb_vote_average, tmdb_vote_count
+            name, overview, air_date, still_path, tmdb_vote_average, tmdb_vote_count,
+            runtime_minutes
         )
         SELECT $1, $2, e.tmdb_id, e.season_number, e.episode_number, e.name, e.overview,
-               e.air_date, e.still_path, e.tmdb_vote_average, e.tmdb_vote_count
+               e.air_date, e.still_path, e.tmdb_vote_average, e.tmdb_vote_count,
+               e.runtime_minutes
         FROM jsonb_to_recordset($3) AS e(
             tmdb_id bigint, season_number int, episode_number int, name text,
             overview text, air_date date, still_path text,
-            tmdb_vote_average float8, tmdb_vote_count int
+            tmdb_vote_average float8, tmdb_vote_count int,
+            runtime_minutes int
         )
         ON CONFLICT (tmdb_id) DO UPDATE SET
             season_id = EXCLUDED.season_id,
@@ -424,7 +433,8 @@ pub async fn upsert_episodes(
             air_date = EXCLUDED.air_date,
             still_path = EXCLUDED.still_path,
             tmdb_vote_average = EXCLUDED.tmdb_vote_average,
-            tmdb_vote_count = EXCLUDED.tmdb_vote_count
+            tmdb_vote_count = EXCLUDED.tmdb_vote_count,
+            runtime_minutes = EXCLUDED.runtime_minutes
         "#,
         show_id,
         season_id,
@@ -693,11 +703,18 @@ pub async fn episodes_with_scores(
             e.still_path,
             e.tmdb_vote_average,
             e.tmdb_vote_count,
+            e.runtime_minutes,
             COALESCE(es.filler_votes, 0)::bigint         AS "filler_votes!",
             COALESCE(es.worth_watching_votes, 0)::bigint AS "worth_watching_votes!",
             COALESCE(es.canon_votes, 0)::bigint          AS "canon_votes!",
             (SELECT mv.value::text FROM vote mv
-             WHERE mv.episode_id = e.id AND mv.user_id = $3) AS "my_vote?"
+             WHERE mv.episode_id = e.id AND mv.user_id = $3) AS "my_vote?",
+            (SELECT mv.reason FROM vote mv
+             WHERE mv.episode_id = e.id AND mv.user_id = $3) AS "my_reason?",
+            (EXISTS (
+                SELECT 1 FROM episode_watch ew
+                WHERE ew.episode_id = e.id AND ew.user_id = $3
+            )) AS "watched!"
         FROM episode e
         LEFT JOIN episode_score es ON es.episode_id = e.id
         WHERE e.show_id = $1 AND ($2::int IS NULL OR e.season_number = $2)
@@ -714,10 +731,60 @@ pub async fn episodes_with_scores(
     .fetch_all(pool)
     .await?;
 
+    // For reason counts: one query per show/season batch — fetch all reason
+    // counts for ALL episodes in this page in a single GROUP BY query, then
+    // distribute into a per-episode map. This avoids N+1 while keeping the
+    // main episode query simple (episode_score doesn't hold reason breakdowns).
+    let reason_rows = sqlx::query!(
+        r#"
+        SELECT
+            v.episode_id,
+            v.value::text AS "value!",
+            v.reason,
+            COUNT(*) AS "count!"
+        FROM vote v
+        JOIN episode e ON e.id = v.episode_id
+        WHERE e.show_id = $1
+          AND ($2::int IS NULL OR e.season_number = $2)
+          AND v.reason IS NOT NULL
+        GROUP BY v.episode_id, v.value, v.reason
+        "#,
+        show_id,
+        season,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    // Build: episode_id → value → reason → count
+    let mut reason_map: HashMap<Uuid, HashMap<String, HashMap<String, i64>>> = HashMap::new();
+    for rr in reason_rows {
+        if let Some(rsn) = rr.reason {
+            reason_map
+                .entry(rr.episode_id)
+                .or_default()
+                .entry(rr.value)
+                .or_default()
+                .insert(rsn, rr.count);
+        }
+    }
+
     Ok(rows
         .into_iter()
         .map(|r| {
             let (f, w, c) = (r.filler_votes, r.worth_watching_votes, r.canon_votes);
+            let st = scoring::status(f, w, c);
+
+            // Reason counts: only expose counts for the plurality value so the
+            // response stays small. An empty map when there's no clear verdict.
+            let reason_counts = scoring::plurality_value(st)
+                .and_then(|pv| {
+                    reason_map
+                        .get(&r.id)
+                        .and_then(|by_val| by_val.get(pv))
+                        .cloned()
+                })
+                .unwrap_or_default();
+
             EpisodeItem {
                 id: r.id,
                 season_number: r.season_number,
@@ -727,17 +794,75 @@ pub async fn episodes_with_scores(
                 still_path: r.still_path,
                 tmdb_rating: r.tmdb_vote_average,
                 tmdb_vote_count: r.tmdb_vote_count,
+                runtime_minutes: r.runtime_minutes,
                 score: EpisodeScoreView {
                     filler_votes: f,
                     worth_watching_votes: w,
                     canon_votes: c,
                     filler_score: scoring::filler_score(f, w, c),
-                    status: scoring::status(f, w, c),
+                    status: st,
                     my_vote: r.my_vote.as_deref().and_then(scoring::VoteValue::from_db),
+                    my_reason: r
+                        .my_reason
+                        .as_deref()
+                        .and_then(scoring::VoteReason::from_str),
+                    reason_counts,
+                    watched: r.watched,
                 },
             }
         })
         .collect())
+}
+
+/// Mark an episode as watched for a user (idempotent upsert).
+pub async fn upsert_watch(pool: &PgPool, user_id: Uuid, episode_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        r#"
+        INSERT INTO episode_watch (user_id, episode_id)
+        VALUES ($1, $2)
+        ON CONFLICT (user_id, episode_id) DO NOTHING
+        "#,
+        user_id,
+        episode_id,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Unmark an episode as watched for a user (idempotent — no error if absent).
+pub async fn delete_watch(pool: &PgPool, user_id: Uuid, episode_id: Uuid) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query!(
+        "DELETE FROM episode_watch WHERE user_id = $1 AND episode_id = $2",
+        user_id,
+        episode_id,
+    )
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
+/// Count of episodes the user has watched for a specific show. Used for the
+/// per-show progress summary returned alongside the signed-in episode list.
+pub async fn watch_count_for_show(
+    pool: &PgPool,
+    user_id: Uuid,
+    show_id: Uuid,
+) -> Result<i64, sqlx::Error> {
+    let count = sqlx::query_scalar!(
+        r#"
+        SELECT COUNT(*)::bigint AS "count!"
+        FROM episode_watch ew
+        JOIN episode e ON e.id = ew.episode_id
+        WHERE ew.user_id = $1
+          AND e.show_id  = $2
+        "#,
+        user_id,
+        show_id,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(count)
 }
 
 /// Whether an episode exists (for a clean 404 before a vote write).
@@ -752,26 +877,61 @@ pub async fn episode_exists(pool: &PgPool, episode_id: Uuid) -> Result<bool, sql
 }
 
 /// Cast or change a user's vote on an episode (one row per user+episode).
+///
+/// `reason` is the optional tag string. Passing `None` clears a previous reason
+/// (the reason always describes the _current_ vote; changing the vote value
+/// replaces the reason in one atomic upsert).
 pub async fn upsert_vote(
     pool: &PgPool,
     user_id: Uuid,
     episode_id: Uuid,
     value: &str,
+    reason: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query!(
         r#"
-        INSERT INTO vote (user_id, episode_id, value)
-        VALUES ($1, $2, ($3::text)::vote_value)
+        INSERT INTO vote (user_id, episode_id, value, reason)
+        VALUES ($1, $2, ($3::text)::vote_value, $4)
         ON CONFLICT (user_id, episode_id)
-        DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+        DO UPDATE SET value = EXCLUDED.value, reason = EXCLUDED.reason, updated_at = now()
         "#,
         user_id,
         episode_id,
         value,
+        reason,
     )
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Reason tag counts for a specific vote value on one episode. Returns a map of
+/// `reason → count` filtered to only non-zero counts, or an empty map if there
+/// are no tagged votes for that value. One GROUP BY query — no N+1.
+pub async fn episode_reason_counts(
+    pool: &PgPool,
+    episode_id: Uuid,
+    value: &str,
+) -> Result<HashMap<String, i64>, sqlx::Error> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT reason, COUNT(*) AS "count!"
+        FROM vote
+        WHERE episode_id = $1
+          AND value = ($2::text)::vote_value
+          AND reason IS NOT NULL
+        GROUP BY reason
+        "#,
+        episode_id,
+        value,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| r.reason.map(|rsn| (rsn, r.count)))
+        .collect())
 }
 
 /// Remove a user's vote. Returns the number of rows deleted (0 if none).
@@ -882,7 +1042,7 @@ mod tests {
         .unwrap();
         let season = upsert_season(&pool, show, 1, Some("Season 1")).await.unwrap();
         upsert_episode(
-            &pool, show, season, 8001, 1, 1, Some("Ep 1"), None, None, None, None, None,
+            &pool, show, season, 8001, 1, 1, Some("Ep 1"), None, None, None, None, None, None,
         )
         .await
         .unwrap();
@@ -909,12 +1069,12 @@ mod tests {
         assert_eq!(linked, alice);
 
         // Trigger maintains the tally on INSERT.
-        upsert_vote(&pool, alice, ep_id, "FILLER").await.unwrap();
-        upsert_vote(&pool, bob, ep_id, "CANON").await.unwrap();
+        upsert_vote(&pool, alice, ep_id, "FILLER", None).await.unwrap();
+        upsert_vote(&pool, bob, ep_id, "CANON", None).await.unwrap();
         assert_eq!(episode_aggregate(&pool, ep_id).await.unwrap(), (1, 0, 1));
 
         // ...on UPDATE (a user changing their vote).
-        upsert_vote(&pool, alice, ep_id, "WORTH_WATCHING").await.unwrap();
+        upsert_vote(&pool, alice, ep_id, "WORTH_WATCHING", None).await.unwrap();
         assert_eq!(episode_aggregate(&pool, ep_id).await.unwrap(), (0, 1, 1));
 
         // ...and on DELETE.
@@ -928,6 +1088,64 @@ mod tests {
         // Deleting Alice keeps her vote (anonymized): the count is unchanged.
         assert_eq!(delete_user(&pool, alice).await.unwrap(), 1);
         assert_eq!(episode_aggregate(&pool, ep_id).await.unwrap(), (0, 1, 0));
+    }
+
+    /// Watch progress: upsert + delete are idempotent, count is per-show, and
+    /// the row is deleted when the user account is deleted (CASCADE).
+    #[cfg(feature = "integration")]
+    #[sqlx::test]
+    async fn episode_watch_crud_and_cascade(pool: sqlx::PgPool) {
+        let show = upsert_show(
+            &pool, 9200, "Watch Test", "watch-test", Some(2022), None, None, None, None,
+        )
+        .await
+        .unwrap();
+        let season = upsert_season(&pool, show, 1, Some("Season 1")).await.unwrap();
+        upsert_episode(
+            &pool, show, season, 9201, 1, 1, Some("Ep 1"), None, None, None, None, None, None,
+        )
+        .await
+        .unwrap();
+        upsert_episode(
+            &pool, show, season, 9202, 1, 2, Some("Ep 2"), None, None, None, None, None, None,
+        )
+        .await
+        .unwrap();
+        let eps = episodes_with_scores(&pool, show, Some(1), None).await.unwrap();
+        let (ep1, ep2) = (eps[0].id, eps[1].id);
+
+        let (alice, _) = resolve_oauth_user(&pool, "test", "sub-alice-w", "alice-w@test.local", Some("Alice"))
+            .await
+            .unwrap();
+
+        // Count starts at zero.
+        assert_eq!(watch_count_for_show(&pool, alice, show).await.unwrap(), 0);
+
+        // Mark ep1 watched; idempotent (second call is a no-op).
+        upsert_watch(&pool, alice, ep1).await.unwrap();
+        upsert_watch(&pool, alice, ep1).await.unwrap();
+        assert_eq!(watch_count_for_show(&pool, alice, show).await.unwrap(), 1);
+
+        // Mark ep2 watched.
+        upsert_watch(&pool, alice, ep2).await.unwrap();
+        assert_eq!(watch_count_for_show(&pool, alice, show).await.unwrap(), 2);
+
+        // Unmark ep1; count drops.
+        delete_watch(&pool, alice, ep1).await.unwrap();
+        assert_eq!(watch_count_for_show(&pool, alice, show).await.unwrap(), 1);
+
+        // Unmark again (idempotent — no error).
+        delete_watch(&pool, alice, ep1).await.unwrap();
+        assert_eq!(watch_count_for_show(&pool, alice, show).await.unwrap(), 1);
+
+        // episodes_with_scores reflects the watched flag correctly.
+        let eps_auth = episodes_with_scores(&pool, show, Some(1), Some(alice)).await.unwrap();
+        assert!(!eps_auth[0].score.watched, "ep1 was unmarked");
+        assert!(eps_auth[1].score.watched, "ep2 is still watched");
+
+        // Deleting the user cascades through episode_watch: rows are gone.
+        delete_user(&pool, alice).await.unwrap();
+        assert_eq!(watch_count_for_show(&pool, alice, show).await.unwrap(), 0);
     }
 
     /// A re-import that renumbers/shifts episodes (matching by stable tmdb_id)
@@ -962,7 +1180,7 @@ mod tests {
         let (carol, _) = resolve_oauth_user(&pool, "test", "sub-carol", "carol@test.local", Some("Carol"))
             .await
             .unwrap();
-        upsert_vote(&pool, carol, b_id, "FILLER").await.unwrap();
+        upsert_vote(&pool, carol, b_id, "FILLER", None).await.unwrap();
 
         // Re-import: a NEW episode (t99) inserts at E2, shifting B→E3 and C→E4.
         // Surviving episodes keep their tmdb_id, so they're updated in place; the

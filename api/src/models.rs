@@ -5,7 +5,9 @@ use chrono::NaiveDate;
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::scoring::{EpisodeStatus, VoteValue};
+use std::collections::HashMap;
+
+use crate::scoring::{EpisodeStatus, VoteReason, VoteValue};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,6 +64,16 @@ pub struct EpisodeScoreView {
     pub status: EpisodeStatus,
     /// The current user's vote on this episode; null when not signed in.
     pub my_vote: Option<VoteValue>,
+    /// The current user's reason tag for their vote; null if no tag or not signed in.
+    pub my_reason: Option<VoteReason>,
+    /// Reason tag counts among votes for the plurality value, keyed by reason
+    /// tag string. Only reasons with count > 0 are included; omitted entirely
+    /// when the episode has no plurality verdict (status is CONTESTED or
+    /// NOT_ENOUGH_VOTES). This lets the UI show e.g. "62% say recap episode".
+    pub reason_counts: HashMap<String, i64>,
+    /// Whether the signed-in user has marked this episode as watched. Always
+    /// false when not signed in.
+    pub watched: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,12 +89,18 @@ pub struct EpisodeItem {
     /// the episode is (re)imported from TMDB. Distinct from our filler `score`.
     pub tmdb_rating: Option<f64>,
     pub tmdb_vote_count: Option<i32>,
+    /// Episode runtime in minutes from TMDB; null until imported or re-synced.
+    pub runtime_minutes: Option<i32>,
     pub score: EpisodeScoreView,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EpisodesResponse {
     pub episodes: Vec<EpisodeItem>,
+    /// How many episodes in the show the signed-in user has watched. Null when
+    /// anonymous (saving a query and keeping the anonymous response cacheable).
+    pub watched_count: Option<i64>,
 }
 
 /// Aggregate for a single episode, returned by the vote endpoints (no `myVote`
@@ -95,6 +113,9 @@ pub struct AggregateView {
     pub canon_votes: i64,
     pub filler_score: Option<f64>,
     pub status: EpisodeStatus,
+    /// Reason tag counts for the plurality value (same semantics as
+    /// `EpisodeScoreView::reason_counts`; omitted when no plurality verdict).
+    pub reason_counts: HashMap<String, i64>,
 }
 
 /// Response to PUT/DELETE vote: the caller's current vote + the new aggregate.
@@ -102,5 +123,7 @@ pub struct AggregateView {
 #[serde(rename_all = "camelCase")]
 pub struct VoteResponse {
     pub my_vote: Option<VoteValue>,
+    /// The caller's reason tag for their current vote; null if none set.
+    pub my_reason: Option<VoteReason>,
     pub score: AggregateView,
 }

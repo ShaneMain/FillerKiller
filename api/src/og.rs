@@ -392,6 +392,7 @@ mod tests {
             still_path: None,
             tmdb_rating: None,
             tmdb_vote_count: None,
+            runtime_minutes: None,
             score: EpisodeScoreView {
                 filler_votes: f,
                 worth_watching_votes: w,
@@ -399,6 +400,9 @@ mod tests {
                 filler_score: scoring::filler_score(f, w, c),
                 status: scoring::status(f, w, c),
                 my_vote: None,
+                my_reason: None,
+                reason_counts: std::collections::HashMap::new(),
+                watched: false,
             },
         };
         let episodes = vec![

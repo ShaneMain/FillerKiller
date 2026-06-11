@@ -45,7 +45,7 @@ use crate::error::AppError;
 use crate::models::{AggregateView, SearchItem, SearchResponse, ShowDetail, VoteResponse};
 use crate::rate_limit::{DirectRateLimiter, IpRateLimiter, UserRateLimiter};
 use crate::response::{cacheable_json, private_json, TTL_AGGREGATE, TTL_CATALOG, TTL_SEARCH};
-use crate::scoring::{build_skip_guide, ContestedHandling, ScoredEpisode, VoteValue};
+use crate::scoring::{build_skip_guide, GuideMode, ScoredEpisode, VoteValue};
 use crate::tmdb::TmdbClient;
 
 /// Shared application state. All fields are cheaply cloneable (pool, clients, and
@@ -208,6 +208,10 @@ async fn main() -> anyhow::Result<()> {
             put(like_guide_handler).delete(unlike_guide_handler),
         )
         .merge(vote_routes)
+        .route(
+            "/api/episodes/{id}/watched",
+            put(put_watched).delete(delete_watched),
+        )
         .route("/api/auth/{provider}/login", get(oauth_login))
         .route("/api/auth/{provider}/callback", get(oauth_callback))
         .route("/api/auth/logout", post(logout))
@@ -544,8 +548,8 @@ struct EpisodesParams {
 }
 
 /// `GET /api/shows/{id}/episodes?season=` — episodes with aggregate scores, and
-/// `myVote` when signed in. Anonymous responses are shared-cacheable briefly;
-/// signed-in responses carry per-user data, so they are never cached.
+/// `myVote` + `watched` when signed in. Anonymous responses are shared-cacheable
+/// briefly; signed-in responses carry per-user data, so they are never cached.
 async fn get_show_episodes(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -554,8 +558,16 @@ async fn get_show_episodes(
 ) -> Result<Response, AppError> {
     let show_id = import::resolve_show_id(&state, &id).await?;
     let user_id = user.as_ref().map(|u| u.id);
-    let episodes = db::episodes_with_scores(&state.pool, show_id, params.season, user_id).await?;
-    let body = models::EpisodesResponse { episodes };
+    let (episodes, watched_count) = tokio::join!(
+        db::episodes_with_scores(&state.pool, show_id, params.season, user_id),
+        async {
+            match user_id {
+                Some(uid) => db::watch_count_for_show(&state.pool, uid, show_id).await.ok(),
+                None => None,
+            }
+        },
+    );
+    let body = models::EpisodesResponse { episodes: episodes?, watched_count };
     Ok(match user_id {
         Some(_) => private_json(&body),
         None => cacheable_json(&body, TTL_AGGREGATE),
@@ -564,8 +576,8 @@ async fn get_show_episodes(
 
 #[derive(Debug, Deserialize)]
 struct SkipGuideParams {
-    /// How to place CONTESTED / NOT_ENOUGH_VOTES episodes: canon (default) | filler | show.
-    contested: Option<String>,
+    /// Which skip-guide mode to use: completionist | standard (default) | canon-only | binge.
+    mode: Option<String>,
     /// Include specials (season 0) in the guide. Default false.
     specials: Option<bool>,
 }
@@ -577,12 +589,15 @@ async fn get_skip_guide(
     Path(id): Path<String>,
     Query(params): Query<SkipGuideParams>,
 ) -> Result<Response, AppError> {
-    let contested = match params.contested.as_deref() {
-        None | Some("canon") => ContestedHandling::Canon,
-        Some("filler") => ContestedHandling::Filler,
-        Some("show") => ContestedHandling::Show,
+    let mode = match params.mode.as_deref() {
+        None | Some("standard") => GuideMode::Standard,
+        Some("completionist") => GuideMode::Completionist,
+        Some("canon-only") => GuideMode::CanonOnly,
+        Some("binge") => GuideMode::Binge,
         Some(other) => {
-            return Err(AppError::BadRequest(format!("invalid contested value: {other:?}")))
+            return Err(AppError::BadRequest(format!(
+                "invalid mode: {other:?}; valid values: completionist, standard, canon-only, binge"
+            )))
         }
     };
 
@@ -598,10 +613,12 @@ async fn get_skip_guide(
             filler_votes: e.score.filler_votes,
             worth_watching_votes: e.score.worth_watching_votes,
             canon_votes: e.score.canon_votes,
+            tmdb_rating: e.tmdb_rating,
+            runtime_minutes: e.runtime_minutes,
         })
         .collect();
 
-    let guide = build_skip_guide(&scored, contested, params.specials.unwrap_or(false));
+    let guide = build_skip_guide(&scored, mode, params.specials.unwrap_or(false));
     Ok(cacheable_json(&guide, TTL_AGGREGATE))
 }
 
@@ -685,9 +702,11 @@ async fn skip_guide_html(State(state): State<AppState>, Path(slug): Path<String>
                     filler_votes: e.score.filler_votes,
                     worth_watching_votes: e.score.worth_watching_votes,
                     canon_votes: e.score.canon_votes,
+                    tmdb_rating: e.tmdb_rating,
+                    runtime_minutes: e.runtime_minutes,
                 })
                 .collect();
-            let guide = build_skip_guide(&scored, ContestedHandling::Canon, false);
+            let guide = build_skip_guide(&scored, GuideMode::Standard, false);
             html_response(seo::skip_guide_page(
                 &template,
                 &state.auth.base_url,
@@ -799,6 +818,9 @@ async fn og_show_png(
 #[derive(Debug, Deserialize)]
 struct VoteBody {
     value: VoteValue,
+    /// Optional reason tag for this vote. Must be one of the tags valid for
+    /// `value`; omitting it (or explicitly `null`) clears any previous reason.
+    reason: Option<scoring::VoteReason>,
 }
 
 /// Build the vote response (caller's vote + fresh aggregate) for an episode.
@@ -806,16 +828,28 @@ async fn vote_response(
     state: &AppState,
     episode_id: Uuid,
     my_vote: Option<VoteValue>,
+    my_reason: Option<scoring::VoteReason>,
 ) -> Result<VoteResponse, AppError> {
     let (f, w, c) = db::episode_aggregate(&state.pool, episode_id).await?;
+    let st = scoring::status(f, w, c);
+
+    // Fetch reason counts only when the episode has a clear plurality verdict.
+    let reason_counts = if let Some(pv) = scoring::plurality_value(st) {
+        db::episode_reason_counts(&state.pool, episode_id, pv).await?
+    } else {
+        std::collections::HashMap::new()
+    };
+
     Ok(VoteResponse {
         my_vote,
+        my_reason,
         score: AggregateView {
             filler_votes: f,
             worth_watching_votes: w,
             canon_votes: c,
             filler_score: scoring::filler_score(f, w, c),
-            status: scoring::status(f, w, c),
+            status: st,
+            reason_counts,
         },
     })
 }
@@ -831,15 +865,39 @@ async fn put_vote(
 ) -> Result<Response, AppError> {
     rate_limit::check_user(&state.user_rate_limiter, user.id)?;
     let Json(body) = body.map_err(|e| AppError::BadRequest(e.body_text()))?;
+
+    // Validate that the supplied reason tag is valid for the vote value.
+    if let Some(reason) = body.reason {
+        if !reason.is_valid_for(body.value) {
+            return Err(AppError::BadRequest(format!(
+                "reason {:?} is not valid for a {:?} vote; valid reasons are: {}",
+                reason.as_str(),
+                body.value.as_db(),
+                scoring::VoteReason::valid_for(body.value)
+                    .iter()
+                    .map(|r| r.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+    }
+
     let episode_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest(format!("invalid episode id: {id:?}")))?;
     if !db::episode_exists(&state.pool, episode_id).await? {
         return Err(AppError::NotFound(format!("episode {episode_id} not found")));
     }
 
-    db::upsert_vote(&state.pool, user.id, episode_id, body.value.as_db()).await?;
+    db::upsert_vote(
+        &state.pool,
+        user.id,
+        episode_id,
+        body.value.as_db(),
+        body.reason.map(|r| r.as_str()),
+    )
+    .await?;
     metrics::counter!("votes_total", "value" => body.value.as_db()).increment(1);
-    let resp = vote_response(&state, episode_id, Some(body.value)).await?;
+    let resp = vote_response(&state, episode_id, Some(body.value), body.reason).await?;
     Ok(private_json(&resp))
 }
 
@@ -857,8 +915,42 @@ async fn delete_vote(
     }
 
     db::delete_vote(&state.pool, user.id, episode_id).await?;
-    let resp = vote_response(&state, episode_id, None).await?;
+    let resp = vote_response(&state, episode_id, None, None).await?;
     Ok(private_json(&resp))
+}
+
+// ---- Watch progress ---------------------------------------------------------
+
+/// `PUT /api/episodes/{id}/watched` — mark an episode as watched. Idempotent.
+/// Auth required. Lower-stakes than voting, so no extra rate-limit layer.
+async fn put_watched(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    user: CurrentUser,
+) -> Result<Response, AppError> {
+    let episode_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest(format!("invalid episode id: {id:?}")))?;
+    if !db::episode_exists(&state.pool, episode_id).await? {
+        return Err(AppError::NotFound(format!("episode {episode_id} not found")));
+    }
+    db::upsert_watch(&state.pool, user.id, episode_id).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// `DELETE /api/episodes/{id}/watched` — unmark an episode as watched. Idempotent.
+/// Auth required.
+async fn delete_watched(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    user: CurrentUser,
+) -> Result<Response, AppError> {
+    let episode_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest(format!("invalid episode id: {id:?}")))?;
+    if !db::episode_exists(&state.pool, episode_id).await? {
+        return Err(AppError::NotFound(format!("episode {episode_id} not found")));
+    }
+    db::delete_watch(&state.pool, user.id, episode_id).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 // ---- User-authored skip guides ----------------------------------------------

@@ -13,6 +13,26 @@ import { useLoginHref } from "../lib/loginNav";
 import { usePageMeta } from "../lib/meta";
 import { EpisodeRow } from "../components/EpisodeRow";
 
+/** Slim progress bar shown when a signed-in user has watched at least one episode. */
+function WatchProgressBar({ watched, total }: { watched: number; total: number }) {
+  if (total === 0) return null;
+  const pct = Math.min(100, Math.round((watched / total) * 100));
+  return (
+    <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
+      <div className="flex items-center justify-between text-xs text-zinc-400">
+        <span>{watched} / {total} watched</span>
+        <span>{pct}%</span>
+      </div>
+      <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+        <div
+          className="h-full rounded-full bg-emerald-600 transition-[width]"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function ShowPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
@@ -21,6 +41,7 @@ export function ShowPage() {
   const [show, setShow] = useState<ShowDetail | null>(null);
   const [season, setSeason] = useState<number | null>(null);
   const [episodes, setEpisodes] = useState<Episode[] | null>(null);
+  const [watchedCount, setWatchedCount] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [loadingEps, setLoadingEps] = useState(false);
@@ -66,7 +87,13 @@ export function ShowPage() {
     setLoadingEps(true);
     setEpisodes(null);
     getEpisodes(id, season)
-      .then((r) => active && setEpisodes(r.episodes))
+      .then((r) => {
+        if (!active) return;
+        setEpisodes(r.episodes);
+        // watchedCount covers the whole show (not just the loaded season);
+        // only update when the API returns a signed-in value.
+        if (r.watchedCount != null) setWatchedCount(r.watchedCount);
+      })
       .catch((e) => active && setErr(e instanceof Error ? e.message : "failed to load episodes"))
       .finally(() => active && setLoadingEps(false));
     return () => {
@@ -142,6 +169,13 @@ export function ShowPage() {
         </Link>
       </div>
 
+      {user && watchedCount != null && watchedCount > 0 && (
+        <WatchProgressBar
+          watched={watchedCount}
+          total={show.seasons.reduce((sum, s) => sum + s.episodeCount, 0)}
+        />
+      )}
+
       {!user && (
         <p className="mt-5 rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-400">
           <Link to={loginHref} className="font-medium text-rose-400 hover:text-rose-300">
@@ -175,7 +209,12 @@ export function ShowPage() {
         <h2 className="sr-only">Episodes{season != null ? ` — Season ${season}` : ""}</h2>
         {loadingEps && <p className="text-zinc-400">Loading episodes…</p>}
         {episodes?.map((ep) => (
-          <EpisodeRow key={ep.id} episode={ep} signedIn={!!user} />
+          <EpisodeRow
+            key={ep.id}
+            episode={ep}
+            signedIn={!!user}
+            onWatchedChange={(d) => setWatchedCount((c) => Math.max(0, (c ?? 0) + d))}
+          />
         ))}
         {episodes && episodes.length === 0 && !loadingEps && (
           <p className="text-zinc-500">No episodes in this season.</p>

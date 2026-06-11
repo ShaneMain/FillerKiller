@@ -142,6 +142,8 @@ pub struct TmdbEpisode {
     /// TMDB's own audience rating (0–10) and the number of votes behind it.
     pub vote_average: Option<f64>,
     pub vote_count: Option<i32>,
+    /// Episode runtime in minutes, as reported by TMDB.
+    pub runtime: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]

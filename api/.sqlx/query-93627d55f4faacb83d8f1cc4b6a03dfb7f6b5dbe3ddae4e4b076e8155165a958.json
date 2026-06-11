@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO vote (user_id, episode_id, value, reason)\n        VALUES ($1, $2, ($3::text)::vote_value, $4)\n        ON CONFLICT (user_id, episode_id)\n        DO UPDATE SET value = EXCLUDED.value, reason = EXCLUDED.reason, updated_at = now()\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "93627d55f4faacb83d8f1cc4b6a03dfb7f6b5dbe3ddae4e4b076e8155165a958"
+}

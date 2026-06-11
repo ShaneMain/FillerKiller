@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO episode_watch (user_id, episode_id)\n        VALUES ($1, $2)\n        ON CONFLICT (user_id, episode_id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a95712f3c8c969807854563f09c56efa342d38bec8b2bdbc5d848281584e8ea2"
+}
