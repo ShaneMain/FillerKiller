@@ -13,14 +13,6 @@ export function Footer() {
           <Link to="/support" className="hover:text-zinc-300">Support</Link>
           <Link to="/privacy" className="hover:text-zinc-300">Privacy</Link>
           <Link to="/terms" className="hover:text-zinc-300">Terms</Link>
-          <a
-            href="https://github.com/ShaneMain/FillerKiller"
-            target="_blank"
-            rel="noreferrer"
-            className="hover:text-zinc-300"
-          >
-            Source
-          </a>
         </nav>
       </div>
     </footer>
