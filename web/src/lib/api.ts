@@ -263,6 +263,12 @@ export interface PopularShow {
   name: string;
   firstAirYear: number | null;
   posterPath: string | null;
+  /** OG-card stats: "X% filler — skip N of M episodes" (specials excluded). */
+  episodeCount: number;
+  fillerPct: number;
+  skipCount: number;
+  /** False while every episode is contested / short of votes. */
+  rated: boolean;
 }
 
 export function popularShows(): Promise<{ shows: PopularShow[] }> {

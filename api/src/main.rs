@@ -568,15 +568,44 @@ async fn list_popular_shows(
     Query(params): Query<PopularShowsParams>,
 ) -> Result<Response, AppError> {
     let limit = params.limit.unwrap_or(12).clamp(1, 50);
-    let shows: Vec<PopularShowItem> = db::popular_shows(&state.pool, limit)
-        .await?
+    let popular = db::popular_shows(&state.pool, limit).await?;
+
+    // Each card carries its OG-card stats ("X% filler — skip N of M"), derived
+    // from the same scored-episode rows the card uses. One indexed query per
+    // show, fanned out concurrently; the edge cache means this whole handler
+    // runs at most once per TTL_POPULAR.
+    let mut tasks = tokio::task::JoinSet::new();
+    for (i, s) in popular.iter().enumerate() {
+        let pool = state.pool.clone();
+        let show_id = s.id;
+        tasks.spawn(async move {
+            (i, db::episodes_with_scores(&pool, show_id, None, None).await)
+        });
+    }
+    let mut stats: Vec<og::OgStats> = vec![og::OgStats::default(); popular.len()];
+    while let Some(joined) = tasks.join_next().await {
+        let (i, episodes) = joined.map_err(|e| AppError::Internal(e.into()))?;
+        match episodes {
+            Ok(eps) => stats[i] = og::stats_from_episodes(&eps),
+            // One show's stats failing shouldn't take the whole list down —
+            // its card just renders without a verdict until the next refresh.
+            Err(e) => tracing::warn!("popular stats query failed for show {i}: {e}"),
+        }
+    }
+
+    let shows: Vec<PopularShowItem> = popular
         .into_iter()
-        .map(|s| PopularShowItem {
+        .zip(stats)
+        .map(|(s, st)| PopularShowItem {
             slug: s.slug,
             tmdb_id: s.tmdb_id,
             name: s.name,
             first_air_year: s.first_air_year,
             poster_path: s.poster_path,
+            episode_count: st.total(),
+            filler_pct: st.filler_pct(),
+            skip_count: st.filler,
+            rated: st.total() > 0 && st.undecided < st.total(),
         })
         .collect();
 

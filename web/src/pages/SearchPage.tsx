@@ -192,6 +192,13 @@ export function SearchPage() {
           <ul className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-6">
             {popular.map((s) => {
               const poster = imageUrl(s.posterPath, "w154");
+              // The poster chip carries the same verdict as the show's OG card,
+              // so the front page sells the product, not just the catalog.
+              const chip = !s.rated
+                ? { text: "Not yet rated", cls: "text-zinc-400" }
+                : s.fillerPct > 0
+                  ? { text: `${s.fillerPct}% filler`, cls: "text-rose-300" }
+                  : { text: "0% filler", cls: "text-emerald-300" };
               return (
                 <li key={s.tmdbId}>
                   <Link
@@ -199,24 +206,35 @@ export function SearchPage() {
                     className="group block"
                     title={s.name}
                   >
-                    {poster ? (
-                      <img
-                        src={poster}
-                        alt={`${s.name} poster`}
-                        loading="lazy"
-                        className="aspect-2/3 w-full rounded-md object-cover ring-1 ring-inset ring-zinc-800 transition group-hover:ring-zinc-500"
-                      />
-                    ) : (
-                      <div className="flex aspect-2/3 w-full items-center justify-center rounded-md bg-zinc-900 p-2 text-center text-xs text-zinc-500 ring-1 ring-inset ring-zinc-800">
-                        {s.name}
-                      </div>
-                    )}
+                    <div className="relative">
+                      {poster ? (
+                        <img
+                          src={poster}
+                          alt={`${s.name} poster`}
+                          loading="lazy"
+                          className="aspect-2/3 w-full rounded-md object-cover ring-1 ring-inset ring-zinc-800 transition group-hover:ring-zinc-500"
+                        />
+                      ) : (
+                        <div className="flex aspect-2/3 w-full items-center justify-center rounded-md bg-zinc-900 p-2 text-center text-xs text-zinc-500 ring-1 ring-inset ring-zinc-800">
+                          {s.name}
+                        </div>
+                      )}
+                      {s.episodeCount > 0 && (
+                        <span
+                          className={`absolute bottom-1 left-1 rounded bg-zinc-950/85 px-1.5 py-0.5 text-[11px] font-semibold ${chip.cls}`}
+                        >
+                          {chip.text}
+                        </span>
+                      )}
+                    </div>
                     <div className="mt-1.5 truncate text-sm text-zinc-300 group-hover:text-zinc-100">
                       {s.name}
                     </div>
-                    {s.firstAirYear && (
-                      <div className="text-xs text-zinc-500">{s.firstAirYear}</div>
-                    )}
+                    <div className="text-xs text-zinc-500">
+                      {s.skipCount > 0
+                        ? `Skip ${s.skipCount} of ${s.episodeCount}`
+                        : (s.firstAirYear ?? "")}
+                    </div>
                   </Link>
                 </li>
               );

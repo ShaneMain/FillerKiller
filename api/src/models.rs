@@ -32,6 +32,10 @@ pub struct SearchResponse {
 
 /// An imported show in the home page's "popular" browse list. Unlike
 /// `SearchItem`, these are always imported, so `slug` is non-null.
+///
+/// The stat fields carry the same numbers as the show's OG card ("X% filler —
+/// skip N of M episodes"), so the front page shows the verdict, not just a
+/// poster. Specials (season 0) are excluded, matching the card.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PopularShowItem {
@@ -40,6 +44,15 @@ pub struct PopularShowItem {
     pub name: String,
     pub first_air_year: Option<i32>,
     pub poster_path: Option<String>,
+    /// Episodes tracked (excluding specials).
+    pub episode_count: u32,
+    /// Whole-number percentage of tracked episodes with a FILLER verdict.
+    pub filler_pct: u32,
+    /// Episodes a skip guide drops — the "skip N" in "skip N of M".
+    pub skip_count: u32,
+    /// False while every episode is still contested / short of votes — the
+    /// client shows "Not yet rated" instead of a misleading 0%.
+    pub rated: bool,
 }
 
 #[derive(Debug, Serialize)]

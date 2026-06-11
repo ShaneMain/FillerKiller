@@ -20,6 +20,9 @@ export default defineConfig({
     proxy: {
       '/api': { target, changeOrigin: true, secure: !isLocal },
       '/health': { target, changeOrigin: true, secure: !isLocal },
+      // Backend-served images: the TMDB poster cache and the OG stat cards.
+      '/img': { target, changeOrigin: true, secure: !isLocal },
+      '/og': { target, changeOrigin: true, secure: !isLocal },
     },
   },
 })

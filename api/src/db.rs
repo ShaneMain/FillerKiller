@@ -186,6 +186,7 @@ pub async fn sitemap_shows(pool: &PgPool) -> Result<Vec<SitemapShow>, sqlx::Erro
 
 /// A show in the home page's "popular" browse list.
 pub struct PopularShow {
+    pub id: Uuid,
     pub tmdb_id: i64,
     pub name: String,
     pub slug: String,
@@ -201,7 +202,7 @@ pub async fn popular_shows(pool: &PgPool, limit: i64) -> Result<Vec<PopularShow>
     let rows = sqlx::query_as!(
         PopularShow,
         r#"
-        SELECT s.tmdb_id, s.name, s.slug, s.poster_path, s.first_air_year
+        SELECT s.id, s.tmdb_id, s.name, s.slug, s.poster_path, s.first_air_year
         FROM show s
         LEFT JOIN episode e ON e.show_id = s.id
         LEFT JOIN episode_score es ON es.episode_id = e.id
