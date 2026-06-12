@@ -112,6 +112,12 @@ jobs:
           workload_identity_provider: projects/799253626309/locations/global/workloadIdentityPools/github/providers/github
           service_account: fillerkiller-deploy@fillerkiller.iam.gserviceaccount.com
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      # Surface auth failures plainly: `gcloud builds submit` wraps any 403 —
+      # including a failed WIF token exchange — in a misleading bucket error.
+      - name: Verify credentials
+        run: |
+          gcloud auth print-access-token > /dev/null && echo "token exchange OK"
+          gcloud storage buckets describe gs://fillerkiller_cloudbuild --format="value(name)"
       # Submit async and poll: the deployer can read build state but not the
       # build-log bucket, and `gcloud builds submit` errors when it can't
       # stream logs even though the build itself is fine.

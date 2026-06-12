@@ -137,7 +137,10 @@ gcloud projects add-iam-policy-binding $PROJECT --member=serviceAccount:$DEPLOY_
 gcloud projects add-iam-policy-binding $PROJECT --member=serviceAccount:$DEPLOY_SA --role=roles/cloudbuild.builds.editor
 gcloud iam service-accounts add-iam-policy-binding $BUILD_SA_EMAIL --member=serviceAccount:$DEPLOY_SA --role=roles/iam.serviceAccountUser
 gcloud iam service-accounts add-iam-policy-binding $RUNTIME_SA --member=serviceAccount:$DEPLOY_SA --role=roles/iam.serviceAccountUser
-gsutil iam ch serviceAccount:$DEPLOY_SA:objectAdmin gs://${PROJECT}_cloudbuild
+# `builds submit` needs to consume the API and read/write the source bucket
+# (bucket-scoped admin: objectAdmin alone lacks storage.buckets.get).
+gcloud projects add-iam-policy-binding $PROJECT --member=serviceAccount:$DEPLOY_SA --role=roles/serviceusage.serviceUsageConsumer
+gsutil iam ch "serviceAccount:$DEPLOY_SA:roles/storage.admin" gs://${PROJECT}_cloudbuild
 # Let ONLY this repo's workflows impersonate the deployer.
 gcloud iam service-accounts add-iam-policy-binding $DEPLOY_SA \
   --member="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github/attribute.repository/ShaneMain/FillerKiller" \
