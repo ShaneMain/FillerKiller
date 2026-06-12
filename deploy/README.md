@@ -137,9 +137,12 @@ gcloud projects add-iam-policy-binding $PROJECT --member=serviceAccount:$DEPLOY_
 gcloud projects add-iam-policy-binding $PROJECT --member=serviceAccount:$DEPLOY_SA --role=roles/cloudbuild.builds.editor
 gcloud iam service-accounts add-iam-policy-binding $BUILD_SA_EMAIL --member=serviceAccount:$DEPLOY_SA --role=roles/iam.serviceAccountUser
 gcloud iam service-accounts add-iam-policy-binding $RUNTIME_SA --member=serviceAccount:$DEPLOY_SA --role=roles/iam.serviceAccountUser
-# `builds submit` needs to consume the API and read/write the source bucket
-# (bucket-scoped admin: objectAdmin alone lacks storage.buckets.get).
+# `builds submit` needs to consume the API, LIST the project's buckets (it
+# locates the staging bucket that way — a bucket-scoped grant can't satisfy
+# this; the resulting error misleadingly blames bucket access), and
+# read/write the source bucket itself.
 gcloud projects add-iam-policy-binding $PROJECT --member=serviceAccount:$DEPLOY_SA --role=roles/serviceusage.serviceUsageConsumer
+gcloud projects add-iam-policy-binding $PROJECT --member=serviceAccount:$DEPLOY_SA --role=roles/storage.bucketViewer
 gsutil iam ch "serviceAccount:$DEPLOY_SA:roles/storage.admin" gs://${PROJECT}_cloudbuild
 # Let ONLY this repo's workflows impersonate the deployer.
 gcloud iam service-accounts add-iam-policy-binding $DEPLOY_SA \
