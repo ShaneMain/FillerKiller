@@ -482,8 +482,8 @@ mod tests {
             my_like: false,
             mine: false,
             entries: vec![
-                GuideEntryView { episode_id: Uuid::nil(), season_number: 1, episode_number: 1, name: Some("Pilot".into()), disposition: Disposition::Watch },
-                GuideEntryView { episode_id: Uuid::nil(), season_number: 1, episode_number: 2, name: None, disposition: Disposition::Skip },
+                GuideEntryView { episode_id: Uuid::nil(), season_number: 1, episode_number: 1, name: Some("Pilot".into()), disposition: Disposition::Watch, watched: false },
+                GuideEntryView { episode_id: Uuid::nil(), season_number: 1, episode_number: 2, name: None, disposition: Disposition::Skip, watched: false },
             ],
         };
         let tmpl = "<head><!--head--><title>D</title><!--/head--></head><body><div id=\"root\"></div></body>";

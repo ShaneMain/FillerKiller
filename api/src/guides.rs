@@ -110,6 +110,9 @@ pub struct GuideSummary {
     pub my_like: bool,
     /// Whether the viewer is the author (false when signed out).
     pub mine: bool,
+    /// How many of this guide's WATCH entries the viewer has watched (0 when
+    /// signed out) — drives the per-guide progress bar in the list.
+    pub my_watched_watch_count: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -120,6 +123,9 @@ pub struct GuideEntryView {
     pub episode_number: i32,
     pub name: Option<String>,
     pub disposition: Disposition,
+    /// Whether the viewer has watched this episode (false when signed out) —
+    /// drives the checklist and progress bar on the guide page.
+    pub watched: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -371,7 +377,13 @@ pub async fn list_published(
             COUNT(e.episode_id) FILTER (WHERE e.disposition = 'OPTIONAL')::bigint AS "optional_count!",
             COUNT(e.episode_id) FILTER (WHERE e.disposition = 'SKIP')::bigint     AS "skip_count!",
             EXISTS(SELECT 1 FROM skip_guide_like l WHERE l.guide_id = g.id AND l.user_id = $2) AS "my_like!",
-            COALESCE(g.author_id = $2, FALSE) AS "mine!"
+            COALESCE(g.author_id = $2, FALSE) AS "mine!",
+            COUNT(e.episode_id) FILTER (
+                WHERE e.disposition = 'WATCH' AND EXISTS(
+                    SELECT 1 FROM episode_watch w
+                    WHERE w.episode_id = e.episode_id AND w.user_id = $2
+                )
+            )::bigint AS "my_watched_watch_count!"
         FROM skip_guide g
         LEFT JOIN app_user u ON u.id = g.author_id
         LEFT JOIN skip_guide_entry e ON e.guide_id = g.id
@@ -399,6 +411,7 @@ pub async fn list_published(
             is_published: r.is_published,
             my_like: r.my_like,
             mine: r.mine,
+            my_watched_watch_count: r.my_watched_watch_count,
         })
         .collect())
 }
@@ -440,13 +453,18 @@ pub async fn get_guide(
     let entries = sqlx::query!(
         r#"
         SELECT e.episode_id, ep.season_number, ep.episode_number, ep.name,
-               e.disposition::text AS "disposition!"
+               e.disposition::text AS "disposition!",
+               EXISTS(
+                   SELECT 1 FROM episode_watch w
+                   WHERE w.episode_id = e.episode_id AND w.user_id = $2
+               ) AS "watched!"
         FROM skip_guide_entry e
         JOIN episode ep ON ep.id = e.episode_id
         WHERE e.guide_id = $1
         ORDER BY ep.season_number, ep.episode_number
         "#,
         guide_id,
+        viewer,
     )
     .fetch_all(pool)
     .await?
@@ -458,6 +476,7 @@ pub async fn get_guide(
             episode_number: r.episode_number,
             name: r.name,
             disposition,
+            watched: r.watched,
         })
     })
     .collect();

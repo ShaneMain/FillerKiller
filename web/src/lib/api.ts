@@ -155,6 +155,8 @@ export interface GuideSummary {
   isPublished: boolean;
   myLike: boolean;
   mine: boolean;
+  /** WATCH entries the viewer has watched (0 when signed out). */
+  myWatchedWatchCount: number;
 }
 
 export interface GuideEntry {
@@ -163,6 +165,8 @@ export interface GuideEntry {
   episodeNumber: number;
   name: string | null;
   disposition: Disposition;
+  /** Whether the viewer has watched this episode (false when signed out). */
+  watched: boolean;
 }
 
 export interface GuideDetail {

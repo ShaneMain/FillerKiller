@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT e.episode_id, ep.season_number, ep.episode_number, ep.name,\n               e.disposition::text AS \"disposition!\"\n        FROM skip_guide_entry e\n        JOIN episode ep ON ep.id = e.episode_id\n        WHERE e.guide_id = $1\n        ORDER BY ep.season_number, ep.episode_number\n        ",
+  "query": "\n        SELECT e.episode_id, ep.season_number, ep.episode_number, ep.name,\n               e.disposition::text AS \"disposition!\",\n               EXISTS(\n                   SELECT 1 FROM episode_watch w\n                   WHERE w.episode_id = e.episode_id AND w.user_id = $2\n               ) AS \"watched!\"\n        FROM skip_guide_entry e\n        JOIN episode ep ON ep.id = e.episode_id\n        WHERE e.guide_id = $1\n        ORDER BY ep.season_number, ep.episode_number\n        ",
   "describe": {
     "columns": [
       {
@@ -27,10 +27,16 @@
         "ordinal": 4,
         "name": "disposition!",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "watched!",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
       "Left": [
+        "Uuid",
         "Uuid"
       ]
     },
@@ -39,8 +45,9 @@
       false,
       false,
       true,
+      null,
       null
     ]
   },
-  "hash": "6e574b74d50ac207669caaa5404e0953634ef3b15174ffa3408c1d3d7dcfe6ba"
+  "hash": "5814b6c65a540a4fcd3ec6471f4433b7db9aec4c9d20a3f7e2f7cb47793eb36e"
 }

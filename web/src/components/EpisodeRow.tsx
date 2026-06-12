@@ -14,6 +14,7 @@ import {
 } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { StatusBadge } from "./StatusBadge";
+import { WatchedToggle } from "./WatchedToggle";
 
 export function EpisodeRow({
   episode,
@@ -127,24 +128,12 @@ export function EpisodeRow({
     <div className="flex flex-col gap-2 border-b border-zinc-800 py-3 sm:flex-row sm:items-center sm:gap-3">
       <div className="flex min-w-0 flex-1 items-start gap-3">
         {signedIn && (
-          <button
-            onClick={() => void toggleWatched()}
-            disabled={watchBusy}
-            aria-pressed={watched}
-            aria-label={watched ? "Mark as unwatched" : "Mark as watched"}
-            title={watched ? "Mark as unwatched" : "Mark as watched"}
-            className={`mt-0.5 h-5 w-5 shrink-0 rounded-full border-2 transition
-              ${watched
-                ? "border-emerald-500 bg-emerald-500 text-zinc-900"
-                : "border-zinc-600 bg-transparent text-transparent hover:border-zinc-400"}
-              ${watchBusy ? "opacity-50" : ""}`}
-          >
-            {watched && (
-              <svg viewBox="0 0 12 12" fill="currentColor" className="h-full w-full p-0.5">
-                <path d="M10 3L5 8.5 2 5.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-              </svg>
-            )}
-          </button>
+          <WatchedToggle
+            watched={watched}
+            busy={watchBusy}
+            onToggle={() => void toggleWatched()}
+            className="mt-0.5 h-5 w-5"
+          />
         )}
         <div className="w-9 shrink-0 pt-0.5 text-center text-sm text-zinc-500">
           E{episode.episodeNumber}

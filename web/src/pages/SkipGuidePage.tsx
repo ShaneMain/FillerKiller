@@ -6,6 +6,8 @@ import {
   getSkipGuide,
   imageUrl,
   listGuides,
+  markWatched,
+  unmarkWatched,
   type GuideMode,
   type GuideSummary,
   type ShowDetail,
@@ -16,6 +18,8 @@ import { DISPOSITION_META } from "../lib/guides";
 import { useAuth } from "../lib/auth";
 import { usePageMeta } from "../lib/meta";
 import { LikeButton } from "../components/LikeButton";
+import { WatchProgressBar } from "../components/WatchProgressBar";
+import { WatchedToggle } from "../components/WatchedToggle";
 
 type Tab = "community" | "user";
 
@@ -139,7 +143,37 @@ function CommunityGuide({ showId, mode, onModeChange }: CommunityGuideProps) {
   const [guide, setGuide] = useState<SkipGuide | null>(null);
   /** Set of episode IDs the signed-in user has watched (null = not yet loaded). */
   const [watchedIds, setWatchedIds] = useState<Set<string> | null>(null);
+  /** Episode IDs with an in-flight watched toggle. */
+  const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const [err, setErr] = useState<string | null>(null);
+
+  // Toggle an episode's watched state straight from the checklist (optimistic,
+  // reverted on failure). Mirrors EpisodeRow's toggle on the show page.
+  async function toggleWatched(episodeId: string) {
+    if (!watchedIds || busyIds.has(episodeId)) return;
+    const next = !watchedIds.has(episodeId);
+    const apply = (ids: Set<string> | null, on: boolean) => {
+      if (!ids) return ids;
+      const copy = new Set(ids);
+      if (on) copy.add(episodeId);
+      else copy.delete(episodeId);
+      return copy;
+    };
+    setWatchedIds((ids) => apply(ids, next));
+    setBusyIds((ids) => new Set(ids).add(episodeId));
+    try {
+      if (next) await markWatched(episodeId);
+      else await unmarkWatched(episodeId);
+    } catch {
+      setWatchedIds((ids) => apply(ids, !next)); // revert
+    } finally {
+      setBusyIds((ids) => {
+        const copy = new Set(ids);
+        copy.delete(episodeId);
+        return copy;
+      });
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -233,20 +267,20 @@ function CommunityGuide({ showId, mode, onModeChange }: CommunityGuideProps) {
           )}
 
           {/* Watch-list progress for signed-in users */}
-          {user && watchedIds != null && guide.watch.length > 0 && (() => {
-            const watchedInList = guide.watch.filter((e) => watchedIds.has(e.episodeId)).length;
-            return (
-              <p className="mt-2 text-sm text-zinc-400">
-                You've watched{" "}
-                <span className="font-medium text-zinc-200">{watchedInList} of {guide.watch.length}</span>{" "}
-                watch-list episodes
-              </p>
-            );
-          })()}
+          {user && watchedIds != null && guide.watch.length > 0 && (
+            <WatchProgressBar
+              watched={guide.watch.filter((e) => watchedIds.has(e.episodeId)).length}
+              total={guide.watch.length}
+              label="watch-list episodes"
+              className="mt-3"
+            />
+          )}
 
           <div className="mt-6 space-y-6">
-            <Bucket title="Watch" tone="emerald" entries={guide.watch} watchedIds={watchedIds} />
-            <Bucket title="Optional — worth it" tone="sky" entries={guide.optional} watchedIds={watchedIds} />
+            <Bucket title="Watch" tone="emerald" entries={guide.watch}
+              watchedIds={watchedIds} busyIds={busyIds} onToggle={user ? (id) => void toggleWatched(id) : undefined} />
+            <Bucket title="Optional — worth it" tone="sky" entries={guide.optional}
+              watchedIds={watchedIds} busyIds={busyIds} onToggle={user ? (id) => void toggleWatched(id) : undefined} />
             <Bucket title="Skip" tone="rose" entries={guide.skipped} />
           </div>
         </>
@@ -317,6 +351,14 @@ function UserGuides({ showId }: { showId: string }) {
                 />
               </div>
               {g.description && <p className="mt-2 line-clamp-2 text-sm text-zinc-400">{g.description}</p>}
+              {user && g.watchCount > 0 && (
+                <WatchProgressBar
+                  watched={g.myWatchedWatchCount}
+                  total={g.watchCount}
+                  label="watched"
+                  className="mt-3"
+                />
+              )}
               <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-zinc-500">
                 <span className="flex items-center gap-1">
                   <i className={`h-2 w-2 rounded-full ${DISPOSITION_META.WATCH.dot}`} /> {g.watchCount} watch
@@ -347,13 +389,19 @@ function Bucket({
   tone,
   entries,
   watchedIds,
+  busyIds,
+  onToggle,
 }: {
   title: string;
   tone: string;
   entries: SkipGuideEntry[];
   /** When provided (signed-in user), watched episodes are dimmed and checked. */
   watchedIds?: Set<string> | null;
+  busyIds?: Set<string>;
+  /** When provided, each entry gets a tappable watched toggle (a checklist). */
+  onToggle?: (episodeId: string) => void;
 }) {
+  const interactive = !!onToggle && watchedIds != null;
   return (
     <section>
       <h2 className={`mb-2 text-sm font-semibold ${TONES[tone]}`}>
@@ -368,17 +416,22 @@ function Bucket({
             return (
               <li
                 key={e.episodeId}
-                className={`text-sm ${watched ? "text-zinc-500" : "text-zinc-300"}`}
+                className={`flex items-center gap-2 text-sm ${watched ? "text-zinc-500" : "text-zinc-300"}`}
               >
-                <span className="mr-2 text-zinc-500">
-                  S{e.seasonNumber}E{e.episodeNumber}
-                </span>
-                {e.name ?? "Untitled"}
-                {watched && (
-                  <span className="ml-1.5 text-emerald-500" title="You've watched this">
-                    ✓
-                  </span>
+                {interactive && (
+                  <WatchedToggle
+                    watched={watched}
+                    busy={busyIds?.has(e.episodeId) ?? false}
+                    onToggle={() => onToggle(e.episodeId)}
+                    className="h-4 w-4"
+                  />
                 )}
+                <span>
+                  <span className="mr-2 text-zinc-500">
+                    S{e.seasonNumber}E{e.episodeNumber}
+                  </span>
+                  {e.name ?? "Untitled"}
+                </span>
               </li>
             );
           })}

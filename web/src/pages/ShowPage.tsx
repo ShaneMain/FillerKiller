@@ -12,26 +12,7 @@ import { useAuth } from "../lib/auth";
 import { useLoginHref } from "../lib/loginNav";
 import { usePageMeta } from "../lib/meta";
 import { EpisodeRow } from "../components/EpisodeRow";
-
-/** Slim progress bar shown when a signed-in user has watched at least one episode. */
-function WatchProgressBar({ watched, total }: { watched: number; total: number }) {
-  if (total === 0) return null;
-  const pct = Math.min(100, Math.round((watched / total) * 100));
-  return (
-    <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
-      <div className="flex items-center justify-between text-xs text-zinc-400">
-        <span>{watched} / {total} watched</span>
-        <span>{pct}%</span>
-      </div>
-      <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
-        <div
-          className="h-full rounded-full bg-emerald-600 transition-[width]"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-    </div>
-  );
-}
+import { WatchProgressBar } from "../components/WatchProgressBar";
 
 export function ShowPage() {
   const { id = "" } = useParams();
