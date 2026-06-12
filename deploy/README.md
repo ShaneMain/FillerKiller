@@ -113,6 +113,40 @@ internet ──▶ Cloudflare (orange-cloud: TLS, CDN cache, respects Cache-Cont
 > briefly). A global edge rate-limit rule can be added later; the in-API limiters
 > (per-IP votes, per-IP search, per-instance import) are the current controls.
 
+### Continuous deployment (GitHub Actions)
+
+Every green CI run on a `master` push deploys automatically — the `deploy` job in
+`.github/workflows/ci.yml` runs the same sequence as the manual steps below
+(Cloud Build image → migrate Job → patch the `app` container) and then smoke-checks
+`/health` + `/health/db`. Manual deploys remain valid for emergencies.
+
+Auth is **keyless** via Workload Identity Federation: GitHub's OIDC token is
+exchanged for `fillerkiller-deploy@` (no service-account key is stored anywhere).
+One-time setup, already applied:
+
+```bash
+gcloud iam workload-identity-pools create github --location=global
+gcloud iam workload-identity-pools providers create-oidc github \
+  --location=global --workload-identity-pool=github \
+  --issuer-uri="https://token.actions.githubusercontent.com" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
+  --attribute-condition="assertion.repository == 'ShaneMain/FillerKiller'"
+gcloud iam service-accounts create fillerkiller-deploy
+# Deploy + build-submit rights; actAs the build SA (builds) and runtime SA (rollouts).
+gcloud projects add-iam-policy-binding $PROJECT --member=serviceAccount:$DEPLOY_SA --role=roles/run.admin
+gcloud projects add-iam-policy-binding $PROJECT --member=serviceAccount:$DEPLOY_SA --role=roles/cloudbuild.builds.editor
+gcloud iam service-accounts add-iam-policy-binding $BUILD_SA_EMAIL --member=serviceAccount:$DEPLOY_SA --role=roles/iam.serviceAccountUser
+gcloud iam service-accounts add-iam-policy-binding $RUNTIME_SA --member=serviceAccount:$DEPLOY_SA --role=roles/iam.serviceAccountUser
+gsutil iam ch serviceAccount:$DEPLOY_SA:objectAdmin gs://${PROJECT}_cloudbuild
+# Let ONLY this repo's workflows impersonate the deployer.
+gcloud iam service-accounts add-iam-policy-binding $DEPLOY_SA \
+  --member="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github/attribute.repository/ShaneMain/FillerKiller" \
+  --role=roles/iam.workloadIdentityUser
+```
+
+The migrate Job runs as the runtime SA (`--service-account $RUNTIME_SA`), so the
+deployer's single `serviceAccountUser` grant covers both the service and the Job.
+
 ### Prerequisites
 
 - `gcloud` CLI authenticated; a GCP project with Cloud Run + Artifact Registry enabled.
@@ -144,6 +178,7 @@ and **after every deploy that adds a migration**:
 gcloud run jobs deploy fillerkiller-migrate \
   --source . --region $REGION \
   --build-service-account=$BUILD_SA \
+  --service-account=$RUNTIME_SA \
   --command fillerkiller-api --args migrate \
   --set-secrets DATABASE_URL=fk-database-url:latest \
   --set-env-vars TMDB_API_READ_TOKEN=unused,AUTH_JWT_SECRET=$(openssl rand -base64 32)

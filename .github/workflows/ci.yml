@@ -80,3 +80,71 @@ jobs:
       # Fail the build on known-vulnerable JS deps (high/critical only — low/moderate
       # advisories in dev-only tooling shouldn't block).
       - run: npm audit --omit=dev --audit-level=high
+
+  # Continuous deployment: every green master push ships to Cloud Run.
+  # Mirrors the manual runbook in deploy/README.md: build the image with Cloud
+  # Build, run pending migrations via the fillerkiller-migrate Job, then patch
+  # ONLY the app container (the service is multi-container — a plain
+  # `gcloud run deploy` would drop the GMP metrics sidecar).
+  #
+  # Auth is keyless: GitHub's OIDC token is exchanged for the
+  # fillerkiller-deploy@ service account through Workload Identity Federation
+  # (pool `github`, restricted to this repository) — no long-lived key exists.
+  deploy:
+    name: Deploy (Cloud Run)
+    needs: [api, web]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    # Serialize deploys; never cancel one mid-rollout.
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      # Required to mint the OIDC token for Workload Identity Federation.
+      id-token: write
+    env:
+      IMAGE: us-east1-docker.pkg.dev/fillerkiller/cloud-run-source-deploy/fillerkiller-api:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: projects/799253626309/locations/global/workloadIdentityPools/github/providers/github
+          service_account: fillerkiller-deploy@fillerkiller.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      # Submit async and poll: the deployer can read build state but not the
+      # build-log bucket, and `gcloud builds submit` errors when it can't
+      # stream logs even though the build itself is fine.
+      - name: Build image (Cloud Build)
+        run: |
+          set -euo pipefail
+          BUILD_ID=$(gcloud builds submit --async --format="value(id)" \
+            --tag "$IMAGE" \
+            --service-account=projects/fillerkiller/serviceAccounts/fillerkiller-build@fillerkiller.iam.gserviceaccount.com \
+            --default-buckets-behavior=regional-user-owned-bucket .)
+          echo "Cloud Build: $BUILD_ID"
+          while :; do
+            STATUS=$(gcloud builds describe "$BUILD_ID" --format="value(status)")
+            echo "  $STATUS"
+            case "$STATUS" in
+              SUCCESS) break ;;
+              QUEUED|PENDING|WORKING) ;;
+              *) echo "build did not succeed: $STATUS"; exit 1 ;;
+            esac
+            sleep 20
+          done
+      # Migrations run BEFORE the new code serves traffic (read paths may
+      # SELECT new columns). `sqlx migrate run` is idempotent — a no-op when
+      # there's nothing pending.
+      - name: Run migrations (Cloud Run Job)
+        run: |
+          gcloud run jobs update fillerkiller-migrate --region us-east1 --image "$IMAGE" --quiet
+          gcloud run jobs execute fillerkiller-migrate --region us-east1 --wait
+      - name: Roll out (app container only)
+        run: |
+          gcloud run services update fillerkiller-api --region us-east1 \
+            --container app --image "$IMAGE" --quiet
+      - name: Smoke check
+        run: |
+          curl -sf https://fillerkiller.app/health
+          curl -sf https://fillerkiller.app/health/db
