@@ -148,8 +148,11 @@ jobs:
           gcloud run jobs execute fillerkiller-migrate --region us-east1 --wait
       - name: Roll out (app container only)
         run: |
-          gcloud run services update fillerkiller-api --region us-east1 \
-            --container app --image "$IMAGE" --quiet
+          # Global flags (--quiet) must come BEFORE --container: everything after
+          # --container is parsed as container-scoped, so a trailing --quiet is
+          # rejected as an unrecognized argument.
+          gcloud run services update fillerkiller-api --region us-east1 --quiet \
+            --container app --image "$IMAGE"
       - name: Smoke check
         run: |
           curl -sf https://fillerkiller.app/health
