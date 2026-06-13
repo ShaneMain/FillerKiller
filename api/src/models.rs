@@ -82,6 +82,12 @@ pub struct ShowDetail {
     pub tmdb_rating: Option<f64>,
     pub tmdb_vote_count: Option<i32>,
     pub seasons: Vec<SeasonSummary>,
+    /// Whole-number percentage of tracked episodes (specials excluded) with a
+    /// FILLER verdict — the same number as the show's OG card and popular chip.
+    pub filler_pct: u32,
+    /// False while every episode is still contested / short of votes, so the
+    /// client shows "Not yet rated" instead of a misleading 0%.
+    pub rated: bool,
 }
 
 #[derive(Debug, Serialize)]

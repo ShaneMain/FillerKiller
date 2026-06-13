@@ -727,6 +727,18 @@ async fn get_show(
         .ok_or_else(|| AppError::NotFound(format!("show {show_id} not found")))?;
     let seasons = db::seasons_with_counts(&state.pool, show_id).await?;
 
+    // The poster badge carries the same "X% filler" verdict as the OG card and
+    // the popular list, derived from the same scored episodes (specials excluded
+    // by stats_from_episodes). A stats failure degrades to "Not yet rated"
+    // rather than failing the whole show page.
+    let stats = match db::episodes_with_scores(&state.pool, show_id, None, None).await {
+        Ok(eps) => og::stats_from_episodes(&eps),
+        Err(e) => {
+            tracing::warn!("show-detail stats query failed for {show_id}: {e}");
+            og::OgStats::default()
+        }
+    };
+
     let detail = ShowDetail {
         id: core.id,
         tmdb_id: core.tmdb_id,
@@ -737,6 +749,8 @@ async fn get_show(
         tmdb_rating: core.tmdb_vote_average,
         tmdb_vote_count: core.tmdb_vote_count,
         seasons,
+        filler_pct: stats.filler_pct(),
+        rated: stats.total() > 0 && stats.undecided < stats.total(),
     };
     Ok(cacheable_json(&detail, TTL_CATALOG))
 }

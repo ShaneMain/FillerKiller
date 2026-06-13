@@ -110,6 +110,15 @@ export function ShowPage() {
   }
 
   const poster = imageUrl(show.posterPath, "w154");
+  // Same verdict chip the home page paints on its popular posters. Unlike the
+  // home grid (which hides the chip for episode-less shows), the detail poster
+  // always carries it: "Not yet rated" is accurate and useful here, and a show
+  // page effectively always has episodes.
+  const fillerChip = !show.rated
+    ? { text: "Not yet rated", cls: "text-zinc-400" }
+    : show.fillerPct > 0
+      ? { text: `${show.fillerPct}% filler`, cls: "text-rose-300" }
+      : { text: "0% filler", cls: "text-emerald-300" };
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8">
@@ -117,11 +126,18 @@ export function ShowPage() {
 
       <div className="flex flex-col gap-4 sm:flex-row">
         {poster && (
-          <img
-            src={poster}
-            alt={`${show.name} poster`}
-            className="h-36 w-24 shrink-0 rounded object-cover"
-          />
+          <div className="relative h-36 w-24 shrink-0">
+            <img
+              src={poster}
+              alt={`${show.name} poster`}
+              className="h-36 w-24 rounded object-cover"
+            />
+            <span
+              className={`absolute bottom-1 left-1 rounded bg-zinc-950/85 px-1.5 py-0.5 text-[11px] font-semibold ${fillerChip.cls}`}
+            >
+              {fillerChip.text}
+            </span>
+          </div>
         )}
         <div className="min-w-0">
           <h1 className="text-2xl font-bold">{show.name}</h1>

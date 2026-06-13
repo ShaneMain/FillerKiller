@@ -75,6 +75,10 @@ export interface ShowDetail {
   tmdbRating: number | null;
   tmdbVoteCount: number | null;
   seasons: SeasonSummary[];
+  /** Whole-number % of tracked episodes (specials excluded) voted FILLER. */
+  fillerPct: number;
+  /** False until episodes have a confident verdict — show "Not yet rated". */
+  rated: boolean;
 }
 
 export interface EpisodeScore {
