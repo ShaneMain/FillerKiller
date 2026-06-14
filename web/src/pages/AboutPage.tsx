@@ -18,12 +18,25 @@ export function AboutPage() {
           <span className="font-medium text-rose-400">Filler</span>,{" "}
           <span className="font-medium text-sky-400">Worth It</span>, or{" "}
           <span className="font-medium text-emerald-400">Canon</span> — and the community
-          verdict shows at a glance what to skip, what's optional, and what's essential.
+          verdict shows at a glance what to skip, what's optional, and what's essential. You can
+          add an optional reason tag (like "recap" or "clip show"), and the most common reason
+          surfaces alongside the verdict.
         </p>
         <p>
           The <Link to="/" className="text-rose-400 hover:text-rose-300">skip guide</Link>{" "}
-          turns those votes into a binge-ready watch order. Episodes without enough votes, or
-          where the community is split, default to "watch" so you never miss something canon.
+          turns those votes into a binge-ready watch order, and you choose how aggressive it is:{" "}
+          <span className="font-medium text-zinc-100">Binge</span> (canon plus the best
+          standalones), <span className="font-medium text-zinc-100">Standard</span>,{" "}
+          <span className="font-medium text-zinc-100">Canon-only</span>, or{" "}
+          <span className="font-medium text-zinc-100">Completionist</span>. Each guide totals the
+          hours you'll save by skipping. Episodes without enough votes, or where the community is
+          split, default to "watch" so you never miss something canon.
+        </p>
+        <p>
+          Signed in, you can <span className="font-medium text-zinc-100">build and share your
+          own guides</span> — a custom watch order for any show — and{" "}
+          <span className="font-medium text-zinc-100">track what you've watched</span>, with
+          progress bars that follow you across a show and its guides.
         </p>
         <h2 className="pt-2 text-lg font-semibold text-zinc-100">Where the data comes from</h2>
         <p>

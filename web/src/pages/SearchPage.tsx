@@ -108,8 +108,11 @@ export function SearchPage() {
         <ul className="mt-5 grid gap-2 sm:grid-cols-3">
           {[
             ["Vote per episode", "Filler · Worth It · Canon — one vote per person."],
-            ["See the ratio", "At-a-glance vote bars and a confident status."],
-            ["Skip guide", "A binge-ready watch order that drops the fluff."],
+            ["See the ratio", "Vote bars, a confident status, and reason tags like “recap”."],
+            ["Skip-guide modes", "Binge, standard, canon-only, or completionist — your call."],
+            ["Build your own guide", "Author and share a custom watch order for any show."],
+            ["Track what you've watched", "Tick off episodes; progress bars follow your guides."],
+            ["See the time saved", "Every guide totals the hours you skip."],
           ].map(([title, body]) => (
             <li key={title} className="rounded-lg border border-zinc-800 bg-zinc-900 p-3">
               <div className="text-sm font-semibold text-zinc-100">{title}</div>
